@@ -77,18 +77,21 @@ async def send_text(to: str, body: str) -> dict:
 
 async def send_digest(to: str, text: str) -> dict:
     """Use an approved Content template if configured (needed for the proactive
-    7am send in production); otherwise free-form (fine in the sandbox)."""
+    7am send outside the 24h window); fall back to free-form if the template
+    isn't usable yet (e.g. still pending approval) — that still delivers when
+    the recipient has messaged within 24h."""
     content_sid = os.environ.get("TWILIO_CONTENT_SID", "").strip()
     if content_sid:
-        data = {
-            "From": _from(),
-            "To": _to_whatsapp(to),
-            "ContentSid": content_sid,
-            "ContentVariables": json.dumps({"1": text}),
-        }
-    else:
-        data = {"From": _from(), "To": _to_whatsapp(to), "Body": text[:1600]}
-    return await _send(data)
+        try:
+            return await _send({
+                "From": _from(),
+                "To": _to_whatsapp(to),
+                "ContentSid": content_sid,
+                "ContentVariables": json.dumps({"1": text}),
+            })
+        except Exception as exc:
+            logger.warning("Template digest failed (%s); falling back to free-form", exc)
+    return await _send({"From": _from(), "To": _to_whatsapp(to), "Body": text[:1600]})
 
 
 def parse_inbound(form: dict) -> list[dict]:
