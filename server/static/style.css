@@ -2026,7 +2026,7 @@ dialog select:focus {
 
 .calendar-week {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -2042,6 +2042,8 @@ dialog select:focus {
 
 .cal-day {
   min-height: 100px;
+  min-width: 0;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
@@ -2065,11 +2067,27 @@ dialog select:focus {
   font-size: 0.625rem;
   font-weight: 600;
   margin-bottom: 3px;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: #fff;
+  cursor: pointer;
 }
+
+.cal-more {
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 1px 4px;
+  cursor: pointer;
+}
+.cal-more:hover { color: var(--accent); }
+
+.ev-detail { display: flex; flex-direction: column; gap: 12px; }
+.ev-row { display: flex; gap: 10px; align-items: flex-start; font-size: 0.9375rem; line-height: 1.4; }
+.ev-row .ev-ico { flex: 0 0 auto; }
+.ev-row > div { min-width: 0; overflow-wrap: anywhere; }
 
 .holiday-card {
   background: var(--surface);

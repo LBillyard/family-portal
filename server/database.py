@@ -465,6 +465,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE events ADD COLUMN google_account_id TEXT")
     if "calendar_name" not in ecols:
         conn.execute("ALTER TABLE events ADD COLUMN calendar_name TEXT")
+    if "description" not in ecols:
+        conn.execute("ALTER TABLE events ADD COLUMN description TEXT")
 
     conn.execute(
         """CREATE TABLE IF NOT EXISTS google_accounts (
@@ -807,6 +809,7 @@ def _event_out(r: dict) -> dict:
         "all_day": bool(r["all_day"]),
         "location": r.get("location"),
         "calendar_name": r.get("calendar_name"),
+        "description": r.get("description"),
     }
 
 
@@ -1535,15 +1538,15 @@ def delete_events_for_google_account(account_id: str) -> None:
 
 def create_google_event(*, user_id: str, google_account_id: str, google_id: str, title: str,
                         start: str, end: str | None, all_day: bool, location: str | None,
-                        calendar_name: str | None = None) -> None:
+                        calendar_name: str | None = None, description: str | None = None) -> None:
     now = _utcnow()
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO events (id, user_id, title, start_at, end_at, all_day, source, location,
-                                   google_event_id, google_account_id, calendar_name, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'google', ?, ?, ?, ?, ?)""",
+                                   google_event_id, google_account_id, calendar_name, description, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'google', ?, ?, ?, ?, ?, ?)""",
             (_new_id(), user_id, title, start, end, int(all_day), location, google_id,
-             google_account_id, calendar_name, now),
+             google_account_id, calendar_name, description, now),
         )
 
 

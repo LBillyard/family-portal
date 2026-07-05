@@ -992,7 +992,7 @@ function calStartOfWeek(d) {
 
 function calAgendaRow(users, e) {
   return `
-      <div class="list-item">
+      <div class="list-item wf-action" data-action="event-detail" data-event-id="${esc(e.id)}" style="cursor:pointer">
         <div class="list-item-time">${e.all_day ? 'All day' : fmt.time(e.start)}</div>
         <div class="list-item-body">
           <div class="list-item-title">${esc(e.title)}</div>
@@ -1000,6 +1000,36 @@ function calAgendaRow(users, e) {
         </div>
         <span class="cal-event" style="background:${userColour(users, e.user_id)}">${userName(users, e.user_id)}</span>
       </div>`;
+}
+
+function openEventDetailModal(id) {
+  const data = store.calendar || {};
+  const users = data.users || [];
+  const e = (data.events || []).find((x) => String(x.id) === String(id));
+  if (!e) return showToast('Event not found', true);
+  const colour = userColour(users, e.user_id);
+  const who = userName(users, e.user_id);
+  const when = e.all_day
+    ? fmt.date(e.start)
+    : `${fmt.date(e.start)} · ${fmt.time(e.start)}${e.end ? '–' + fmt.time(e.end) : ''}`;
+  const rows = [`<div class="ev-row"><span class="ev-ico">🕑</span><div>${esc(when)}</div></div>`];
+  if (e.location) rows.push(`<div class="ev-row"><span class="ev-ico">📍</span><div>${esc(e.location)}</div></div>`);
+  rows.push(
+    `<div class="ev-row"><span class="ev-ico">👤</span><div>${who}${
+      e.source === 'google' && e.calendar_name ? ` · <span style="color:var(--text-muted)">${esc(e.calendar_name)}</span>` : ''
+    }</div></div>`
+  );
+  if (e.description) rows.push(`<div class="ev-row"><span class="ev-ico">📝</span><div style="white-space:pre-wrap">${esc(e.description)}</div></div>`);
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header" style="border-left:5px solid ${colour};padding-left:14px">
+        <h3>${esc(e.title)}</h3><p>${e.source === 'google' ? 'From Google Calendar' : 'Portal event'}</p>
+      </div>
+      <div class="wf-modal-body ev-detail">${rows.join('')}</div>
+      <div class="wf-modal-footer"><button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Close</button></div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
 }
 
 function renderCalendar(data) {
@@ -1067,10 +1097,12 @@ function renderCalendar(data) {
       <div class="cal-day${iso === todayIso ? ' today' : ''}"${muted ? ' style="opacity:.4"' : ''}>
         <div class="cal-day-num">${d.getDate()}</div>
         ${dayEvents
+          .slice(0, 4)
           .map(
-            (e) => `<div class="cal-event" style="background:${userColour(users, e.user_id)}" title="${esc(e.title)}">${esc(e.title)}</div>`
+            (e) => `<div class="cal-event wf-action" data-action="event-detail" data-event-id="${esc(e.id)}" style="background:${userColour(users, e.user_id)}" title="${esc(e.title)}">${e.all_day ? '' : esc(fmt.time(e.start)) + ' '}${esc(e.title)}</div>`
           )
           .join('')}
+        ${dayEvents.length > 4 ? `<div class="cal-more wf-action" data-action="cal-view-agenda">+${dayEvents.length - 4} more</div>` : ''}
       </div>`;
     })
     .join('');
@@ -1979,6 +2011,10 @@ function initActions() {
     }
     if (action === 'edit-member') {
       if (btn.dataset.userId) openEditMemberModal(btn.dataset.userId);
+      return;
+    }
+    if (action === 'event-detail') {
+      if (btn.dataset.eventId) openEventDetailModal(btn.dataset.eventId);
       return;
     }
     if (action === 'edit-appointment') {

@@ -98,7 +98,10 @@ def sync_account(account: dict) -> int:
         cal_items = [{"id": "primary", "primary": True}]
 
     for cal in cal_items:
-        if not (cal.get("primary") or cal.get("selected")):
+        # Only sync calendars this account OWNS — not staff/shared calendars that
+        # others have shared with them (those would flood the view with everyone
+        # else's diary). Each person connects their own account for their events.
+        if cal.get("accessRole") != "owner":
             continue
         cal_id = cal.get("id", "primary")
         cal_name = cal.get("summaryOverride") or cal.get("summary") or ""
@@ -134,6 +137,7 @@ def sync_account(account: dict) -> int:
                 all_day="date" in start,
                 location=item.get("location"),
                 calendar_name=cal_name,
+                description=item.get("description"),
             )
             count += 1
 
