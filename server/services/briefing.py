@@ -100,29 +100,26 @@ def whatsapp_digest_line(user: dict | None = None) -> str:
     ' · ' between sections and ', ' between items. Kept under ~1000 chars."""
     b = build_briefing(user)
     today = date.fromisoformat(b["date"])
-    date_str = f"{today.strftime('%a')} {today.day} {today.strftime('%b')}"
+    date_str = f"{today.strftime('%A')} {today.day} {today.strftime('%b')}"
 
-    parts: list[str] = []
-    evs = b["today_events"]
-    if evs:
-        items = ", ".join(f"{_hhmm(e['start'])}{e['title']}" for e in evs[:5])
-        parts.append(f"📅 {len(evs)} event(s): {items}")
-    appts = b["today_appointments"]
-    if appts:
-        items = ", ".join(f"{_hhmm(a['datetime'])}{a['title']}" for a in appts[:4])
-        parts.append(f"🩺 {items}")
-    tasks = b["due_tasks"]
-    if tasks:
-        parts.append("✅ due: " + ", ".join(t["title"] for t in tasks[:4]))
-    rn = b["urgent_renewals"]
-    if rn:
-        parts.append("🔔 " + ", ".join(f"{r.get('title') or r.get('name')} ({r['days_until']}d)" for r in rn[:3]))
-    trip = b["next_trip"]
-    if trip and trip.get("days_until") is not None:
-        parts.append(f"✈️ {trip['title']} in {trip['days_until']}d")
+    # Diary = today's events + appointments, ordered by time.
+    diary = [(_hhmm(e["start"]), e["title"]) for e in b["today_events"]]
+    diary += [(_hhmm(a["datetime"]), a["title"]) for a in b["today_appointments"]]
+    diary.sort(key=lambda x: x[0] or "zz")
 
-    if parts:
-        body = f"{date_str} — " + " · ".join(parts) + ". Reply to add or change anything."
+    # Outstanding tasks: open tasks, prioritising anything due today or overdue.
+    open_tasks = [t for t in db.list_tasks() if not t.get("done")]
+    due_now = [t for t in open_tasks if t.get("due") and t["due"][:10] <= today.isoformat()]
+    task_list = due_now or open_tasks
+
+    if diary:
+        diary_part = "📅 " + ", ".join(f"{tm}{ti}".strip() for tm, ti in diary[:6])
     else:
-        body = f"{date_str}: a clear day, nothing scheduled. Reply to add anything."
+        diary_part = "📅 Nothing in the diary"
+    if task_list:
+        task_part = "✅ " + ", ".join(t["title"] for t in task_list[:6])
+    else:
+        task_part = "✅ No outstanding tasks"
+
+    body = f"{date_str} — {diary_part} · {task_part}"
     return re.sub(r"\s+", " ", body).strip()[:1000]
