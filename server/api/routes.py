@@ -5,12 +5,14 @@ import secrets
 
 from urllib.parse import quote
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from server import auth, database as db
 from server.services import csv_import, dashboard as dash, documents as doc_files, google_calendar, openrouter, open_banking
-from server.services import assistant as ai_assistant
+from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
 from shared.schemas import (
     AppointmentCreate,
     AssistantChatRequest,
@@ -19,6 +21,8 @@ from shared.schemas import (
     EventCreate,
     HolidayIdeaRequest,
     LoginRequest,
+    MediaUpdate,
+    SubscriptionUpdate,
     TaskCreate,
     TaskUpdate,
     TransactionCreate,
@@ -215,6 +219,7 @@ async def banking_sync(_: dict = Depends(require_user)):
             results.append({"provider": conn["provider_name"], **synced})
         except Exception as exc:
             results.append({"provider": conn["provider_name"], "error": str(exc)})
+    sub_svc.refresh_subscriptions()
     return {"synced": results, "banking_last": db.get_setting("banking_last_sync", "just now")}
 
 
@@ -325,6 +330,33 @@ async def import_csv(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"imported": count}
+
+
+# --- Subscriptions ---
+
+@router.get("/subscriptions")
+def api_subscriptions(_: dict = Depends(require_user)):
+    return sub_svc.refresh_subscriptions()
+
+
+@router.post("/subscriptions/scan")
+def scan_subscriptions(_: dict = Depends(require_user)):
+    return sub_svc.refresh_subscriptions()
+
+
+@router.patch("/subscriptions/{sub_id}")
+def patch_subscription(sub_id: str, body: SubscriptionUpdate, _: dict = Depends(require_user)):
+    data = body.model_dump(exclude_unset=True)
+    sub = db.update_subscription(sub_id, data)
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    all_items = db.list_subscriptions(include_ignored=True)
+    visible = [s for s in all_items if s["status"] != "ignored"]
+    return {
+        "subscription": sub,
+        "summary": sub_svc.build_summary(all_items),
+        "subscriptions": visible,
+    }
 
 
 # --- Appointments ---
@@ -497,6 +529,100 @@ def remove_document(doc_id: str, _: dict = Depends(require_user)):
     if file_path is None:
         raise HTTPException(status_code=404, detail="Document not found")
     disk = doc_files.UPLOAD_DIR / file_path
+    if disk.is_file():
+        disk.unlink()
+    return {"ok": True}
+
+
+# --- Family media ---
+
+@router.get("/media")
+def api_media(trip_id: str = "", _: dict = Depends(require_user)):
+    tid = trip_id if trip_id and trip_id != "all" else None
+    return {
+        "items": db.list_media(tid),
+        "trips": db.list_trips(),
+    }
+
+
+@router.post("/media/upload")
+async def upload_media(
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    caption: str = Form(""),
+    trip_id: str = Form(""),
+    taken_at: str = Form(""),
+    user: dict = Depends(require_user),
+):
+    content = await file.read()
+    try:
+        ext, media_type = media_files.validate_upload(file.filename or "file", len(content))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if trip_id:
+        trips = {t["id"] for t in db.list_trips()}
+        if trip_id not in trips:
+            raise HTTPException(status_code=400, detail="Invalid trip")
+
+    media_files.ensure_media_dir()
+    mid = __import__("uuid").uuid4().hex[:12]
+    safe = media_files.safe_filename(file.filename or "media")
+    stored = f"{mid}_{safe}"
+    path = media_files.MEDIA_DIR / stored
+    path.write_bytes(content)
+
+    item = db.create_media({
+        "id": mid,
+        "title": title.strip() or Path(file.filename or "Photo").stem,
+        "caption": caption.strip(),
+        "media_type": media_type,
+        "trip_id": trip_id or None,
+        "file_name": file.filename,
+        "file_path": stored,
+        "mime_type": media_files.mime_for_path(path),
+        "file_size": len(content),
+        "taken_at": taken_at.strip(),
+        "user_id": user["id"],
+    })
+    return item
+
+
+@router.get("/media/{media_id}/file")
+def serve_media(media_id: str, _: dict = Depends(require_user)):
+    item = db.get_media(media_id)
+    if not item or not item.get("file_path"):
+        raise HTTPException(status_code=404, detail="Media not found")
+    path = media_files.MEDIA_DIR / item["file_path"]
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="File missing on disk")
+    return FileResponse(
+        path,
+        filename=item.get("file_name") or item["title"],
+        media_type=media_files.mime_for_path(path),
+        content_disposition_type="inline",
+    )
+
+
+@router.patch("/media/{media_id}")
+def patch_media(media_id: str, body: MediaUpdate, _: dict = Depends(require_user)):
+    data = body.model_dump(exclude_unset=True)
+    if "trip_id" in data and data["trip_id"]:
+        trips = {t["id"] for t in db.list_trips()}
+        if data["trip_id"] not in trips:
+            raise HTTPException(status_code=400, detail="Invalid trip")
+    item = db.update_media(media_id, data)
+    if not item:
+        raise HTTPException(status_code=404, detail="Media not found")
+    return item
+
+
+@router.delete("/media/{media_id}")
+def remove_media(media_id: str, _: dict = Depends(require_user)):
+    file_path = db.delete_media(media_id)
+    if file_path is None:
+        raise HTTPException(status_code=404, detail="Media not found")
+    disk = media_files.MEDIA_DIR / file_path
     if disk.is_file():
         disk.unlink()
     return {"ok": True}

@@ -26,6 +26,7 @@ const DOC_CATEGORY_LABELS = {
 };
 
 let vaultFilter = 'all';
+let mediaFilter = 'all';
 let activeModalKey = null;
 
 async function api(path, options = {}) {
@@ -881,6 +882,7 @@ function renderHolidays(data) {
           ${bookings ? `<div class="booking-links">${bookings}</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             <button class="btn btn-sm btn-primary wf-action" data-action="view-trip">Details</button>
+            <button class="btn btn-sm btn-soft wf-action" data-tab-link="media" data-media-trip="${t.id}">Photos</button>
             <button class="btn btn-sm btn-outline wf-action" data-action="edit-trip">Edit</button>
           </div>
         </div>
@@ -970,6 +972,113 @@ function renderDocuments(data, filter = vaultFilter) {
         )
         .join('')
     : `<div class="vault-empty"><p>No documents in this category yet.</p><p class="hint-small">Upload your home insurance, passports, MOT or other files above.</p></div>`;
+}
+
+function renderMedia(data, filter = mediaFilter) {
+  const { items = [], trips = [] } = data;
+  const filtered =
+    filter === 'all' ? items : filter === 'none' ? items.filter((m) => !m.trip_id) : items.filter((m) => m.trip_id === filter);
+  const photos = items.filter((m) => m.media_type === 'photo').length;
+  const videos = items.filter((m) => m.media_type === 'video').length;
+  const linked = items.filter((m) => m.trip_id).length;
+
+  const tripSelect = document.getElementById('media-trip-select');
+  if (tripSelect) {
+    tripSelect.innerHTML =
+      '<option value="">No trip</option>' +
+      trips.map((t) => `<option value="${t.id}">${esc(t.title)}</option>`).join('');
+  }
+
+  document.getElementById('media-stats').innerHTML = `
+    <div class="stat"><span>${items.length}</span><label>Total items</label></div>
+    <div class="stat"><span>${photos}</span><label>Photos</label></div>
+    <div class="stat"><span>${videos}</span><label>Videos</label></div>
+    <div class="stat"><span>${linked}</span><label>Linked to trips</label></div>`;
+
+  document.getElementById('media-filters').innerHTML =
+    `<button class="filter-chip-btn wf-action ${filter === 'all' ? 'active' : ''}" data-media-trip="all">All</button>` +
+    `<button class="filter-chip-btn wf-action ${filter === 'none' ? 'active' : ''}" data-media-trip="none">Unlinked</button>` +
+    trips
+      .map(
+        (t) =>
+          `<button class="filter-chip-btn wf-action ${filter === t.id ? 'active' : ''}" data-media-trip="${t.id}">${esc(t.title)}</button>`
+      )
+      .join('');
+
+  document.getElementById('media-grid').innerHTML = filtered.length
+    ? filtered
+        .map((m) => {
+          const fileUrl = m.has_file ? `/api/media/${m.id}/file` : '';
+          const preview =
+            m.media_type === 'photo' && fileUrl
+              ? `<img class="media-thumb" src="${fileUrl}" alt="${esc(m.title)}" loading="lazy">`
+              : `<div class="media-thumb media-thumb-video"><span>▶</span><small>Video</small></div>`;
+          return `
+      <article class="media-card">
+        <a href="${fileUrl || '#'}" class="media-preview" target="_blank" rel="noopener"${fileUrl ? '' : ' aria-disabled="true"'}>
+          ${preview}
+        </a>
+        <div class="media-card-body">
+          <h3 class="media-card-title">${esc(m.title)}</h3>
+          ${m.trip_title ? `<span class="media-trip-pill">${esc(m.trip_title)}</span>` : ''}
+          ${m.caption ? `<p class="media-card-caption">${esc(m.caption)}</p>` : ''}
+          <div class="media-card-meta">
+            ${m.taken_at ? `<span>${fmt.date(m.taken_at)}</span>` : ''}
+            ${m.has_file ? `<span>${fmt.fileSize(m.file_size)}</span>` : ''}
+          </div>
+          <div class="media-card-actions">
+            ${fileUrl ? `<a class="btn btn-sm btn-soft" href="${fileUrl}" target="_blank" rel="noopener">View</a>` : ''}
+            <button class="btn btn-sm btn-ghost wf-action" data-action="delete-media" data-media-id="${m.id}">Delete</button>
+          </div>
+        </div>
+      </article>`;
+        })
+        .join('')
+    : `<div class="vault-empty"><p>No photos or videos yet.</p><p class="hint-small">Upload family memories and link them to your holidays.</p></div>`;
+}
+
+function subscriptionStatusLabel(status) {
+  if (status === 'confirmed') return 'Confirmed';
+  if (status === 'ignored') return 'Hidden';
+  return 'Detected';
+}
+
+function frequencyLabel(freq) {
+  return { monthly: 'Monthly', weekly: 'Weekly', yearly: 'Yearly', quarterly: 'Quarterly' }[freq] || freq;
+}
+
+function renderSubscriptions(data) {
+  const { subscriptions = [], summary = {} } = data;
+
+  document.getElementById('subscription-stats').innerHTML = `
+    <div class="stat"><span>${summary.active_count || 0}</span><label>Active subscriptions</label></div>
+    <div class="stat"><span>${fmt.gbp(summary.monthly_total || 0)}</span><label>Est. monthly</label></div>
+    <div class="stat"><span>${fmt.gbp(summary.yearly_estimate || 0)}</span><label>Est. yearly</label></div>`;
+
+  document.getElementById('subscription-list').innerHTML = subscriptions.length
+    ? subscriptions
+        .map(
+          (s) => `
+      <div class="subscription-row">
+        <div class="subscription-main">
+          <div class="subscription-name">${esc(s.display_name)}</div>
+          <div class="subscription-meta">
+            <span class="status-tag ${s.status === 'confirmed' ? 'booked' : s.status === 'detected' ? 'planning' : 'idea'}">${subscriptionStatusLabel(s.status)}</span>
+            <span>${frequencyLabel(s.frequency)}</span>
+            <span>${s.occurrence_count} charges found</span>
+            ${s.account ? `<span>${esc(s.account)}</span>` : ''}
+          </div>
+          ${s.next_expected_date ? `<div class="subscription-next">Next expected: ${fmt.date(s.next_expected_date)}</div>` : ''}
+        </div>
+        <div class="subscription-amount">${fmt.gbp(s.amount)}</div>
+        <div class="subscription-actions">
+          ${s.status !== 'confirmed' ? `<button class="btn btn-sm btn-primary wf-action" data-action="confirm-subscription" data-sub-id="${s.id}">Confirm</button>` : ''}
+          <button class="btn btn-sm btn-ghost wf-action" data-action="ignore-subscription" data-sub-id="${s.id}">Hide</button>
+        </div>
+      </div>`
+        )
+        .join('')
+    : `<div class="vault-empty"><p>No recurring subscriptions detected yet.</p><p class="hint-small">Connect your bank and tap <strong>Scan transactions</strong>, or import CSV data on the Finances tab.</p></div>`;
 }
 
 function renderSettings(data) {
@@ -1144,8 +1253,21 @@ function initActions() {
   document.addEventListener('click', (e) => {
     const tabLink = e.target.closest('[data-tab-link]');
     if (tabLink) {
+      if (tabLink.dataset.mediaTrip) {
+        mediaFilter = tabLink.dataset.mediaTrip;
+      }
       switchTab(tabLink.dataset.tabLink);
       closeModal();
+      if (tabLink.dataset.mediaTrip && store.media) {
+        renderMedia(store.media, mediaFilter);
+      }
+      return;
+    }
+
+    const mediaTripBtn = e.target.closest('[data-media-trip]');
+    if (mediaTripBtn) {
+      mediaFilter = mediaTripBtn.dataset.mediaTrip;
+      renderMedia(store.media, mediaFilter);
       return;
     }
 
@@ -1233,6 +1355,54 @@ function initActions() {
           .then(() => {
             showToast('Document deleted');
             load();
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'delete-media') {
+      const mediaId = btn.dataset.mediaId;
+      if (mediaId && confirm('Delete this photo/video?')) {
+        api(`/media/${mediaId}`, { method: 'DELETE' })
+          .then(() => {
+            showToast('Media deleted');
+            load();
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'scan-subscriptions') {
+      api('/subscriptions/scan', { method: 'POST' })
+        .then((r) => {
+          store.subscriptions = r;
+          renderSubscriptions(r);
+          showToast(`Found ${r.subscriptions?.length || 0} subscriptions`);
+        })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'confirm-subscription') {
+      const subId = btn.dataset.subId;
+      if (subId) {
+        api(`/subscriptions/${subId}`, { method: 'PATCH', body: JSON.stringify({ status: 'confirmed' }) })
+          .then((r) => {
+            store.subscriptions = { subscriptions: r.subscriptions, summary: r.summary };
+            renderSubscriptions(store.subscriptions);
+            showToast('Subscription confirmed');
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'ignore-subscription') {
+      const subId = btn.dataset.subId;
+      if (subId && confirm('Hide this subscription from the list?')) {
+        api(`/subscriptions/${subId}`, { method: 'PATCH', body: JSON.stringify({ status: 'ignored' }) })
+          .then((r) => {
+            store.subscriptions = { subscriptions: r.subscriptions, summary: r.summary };
+            renderSubscriptions(store.subscriptions);
+            showToast('Subscription hidden');
           })
           .catch((err) => showToast(err.message, true));
       }
@@ -1363,6 +1533,41 @@ function initActions() {
       form.reset();
       showToast('Document uploaded');
       switchTab('documents');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  document.getElementById('media-upload-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fileInput = form.querySelector('input[name="file"]');
+    const file = fileInput?.files?.[0];
+    if (!file) {
+      showToast('Choose a photo or video', true);
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('title', form.title.value.trim());
+    formData.append('caption', form.caption.value.trim());
+    formData.append('trip_id', form.trip_id.value);
+    formData.append('taken_at', form.taken_at.value);
+    try {
+      showToast('Uploading…');
+      const res = await fetch(`${API}/media/upload`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Upload failed');
+      }
+      form.reset();
+      showToast('Media uploaded');
+      switchTab('media');
       await load();
     } catch (err) {
       showToast(err.message, true);
@@ -1538,17 +1743,19 @@ async function load() {
     return;
   }
 
-  const [dashboard, calendar, finances, appointments, holidays, documents, settings] = await Promise.all([
+  const [dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings] = await Promise.all([
     api('/dashboard'),
     api('/calendar'),
     api('/finances'),
     api('/appointments'),
     api('/holidays'),
     api('/documents'),
+    api('/media'),
+    api('/subscriptions'),
     api('/settings'),
   ]);
 
-  store = { dashboard, calendar, finances, appointments, holidays, documents, settings };
+  store = { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings };
 
   renderMembers(dashboard.users);
   renderWelcome(dashboard);
@@ -1559,6 +1766,8 @@ async function load() {
   renderFinances(finances);
   renderAppointments(appointments);
   renderHolidays(holidays);
+  renderMedia(media);
+  renderSubscriptions(subscriptions);
   renderDocuments(documents);
   renderSettings(settings);
   renderNotifications(settings.notifications || [], dashboard.notifications_unread);

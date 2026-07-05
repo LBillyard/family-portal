@@ -4,7 +4,7 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -193,6 +193,39 @@ def init_db() -> None:
                 last_synced_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS media_items (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                caption TEXT NOT NULL DEFAULT '',
+                media_type TEXT NOT NULL,
+                trip_id TEXT,
+                file_name TEXT,
+                file_path TEXT,
+                mime_type TEXT,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                taken_at TEXT,
+                uploaded_at TEXT NOT NULL,
+                user_id TEXT,
+                FOREIGN KEY (trip_id) REFERENCES holiday_trips(id) ON DELETE SET NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id TEXT PRIMARY KEY,
+                merchant_key TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                amount REAL NOT NULL,
+                frequency TEXT NOT NULL DEFAULT 'monthly',
+                status TEXT NOT NULL DEFAULT 'detected',
+                category TEXT NOT NULL DEFAULT 'Subscriptions',
+                last_charge_date TEXT,
+                next_expected_date TEXT,
+                occurrence_count INTEGER NOT NULL DEFAULT 0,
+                account TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -232,6 +265,63 @@ def _migrate(conn: sqlite3.Connection) -> None:
     ]:
         if col not in dcols:
             conn.execute(ddl)
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS media_items (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            caption TEXT NOT NULL DEFAULT '',
+            media_type TEXT NOT NULL,
+            trip_id TEXT,
+            file_name TEXT,
+            file_path TEXT,
+            mime_type TEXT,
+            file_size INTEGER NOT NULL DEFAULT 0,
+            taken_at TEXT,
+            uploaded_at TEXT NOT NULL,
+            user_id TEXT,
+            FOREIGN KEY (trip_id) REFERENCES holiday_trips(id) ON DELETE SET NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS subscriptions (
+            id TEXT PRIMARY KEY,
+            merchant_key TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            frequency TEXT NOT NULL DEFAULT 'monthly',
+            status TEXT NOT NULL DEFAULT 'detected',
+            category TEXT NOT NULL DEFAULT 'Subscriptions',
+            last_charge_date TEXT,
+            next_expected_date TEXT,
+            occurrence_count INTEGER NOT NULL DEFAULT 0,
+            account TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        )"""
+    )
+
+    netflix_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM transactions WHERE description LIKE '%NETFLIX%'"
+    ).fetchone()["c"]
+    account_ids = [r[0] for r in conn.execute("SELECT id FROM accounts ORDER BY id").fetchall()]
+    if netflix_count == 0 and account_ids:
+        now = _utcnow()
+        recurring = [
+            ("NETFLIX.COM", "Subscriptions", -17.99),
+            ("SPOTIFY PREMIUM", "Subscriptions", -10.99),
+            ("DISNEY PLUS", "Subscriptions", -7.99),
+            ("AMAZON PRIME", "Subscriptions", -8.99),
+        ]
+        for month in range(1, 7):
+            pay = f"2026-{month:02d}-15"
+            for i, (desc, cat, amt) in enumerate(recurring):
+                acct = account_ids[i % len(account_ids)]
+                conn.execute(
+                    "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (_new_id(), acct, desc, cat, amt, pay, now),
+                )
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -296,6 +386,21 @@ def _seed(conn: sqlite3.Connection) -> None:
             "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (_new_id(), acct, desc, cat, amt, d, now),
         )
+
+    recurring = [
+        ("starling", "NETFLIX.COM", "Subscriptions", -17.99),
+        ("starling", "SPOTIFY PREMIUM", "Subscriptions", -10.99),
+        ("amex", "DISNEY PLUS", "Subscriptions", -7.99),
+        ("revolut", "AMAZON PRIME", "Subscriptions", -8.99),
+        ("starling", "OCTOPUS ENERGY", "Utilities", -142.50),
+    ]
+    for month in range(1, 7):
+        pay = f"2026-{month:02d}-15"
+        for acct, desc, cat, amt in recurring:
+            conn.execute(
+                "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (_new_id(), acct, desc, cat, amt, pay, now),
+            )
 
     tasks = [
         ("Book Portugal airport parking", "luke", "2026-07-10", 0, "high"),
@@ -500,6 +605,19 @@ def list_transactions(limit: int = 50) -> list[dict]:
                LEFT JOIN accounts a ON a.id = t.account_id
                ORDER BY t.txn_date DESC LIMIT ?""",
             (limit,),
+        ).fetchall()
+        return [_txn_out(row_to_dict(r)) for r in rows]
+
+
+def list_transactions_for_analysis(limit: int = 1000) -> list[dict]:
+    cutoff = (date.today() - timedelta(days=365)).isoformat()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT t.*, a.name AS account_name FROM transactions t
+               LEFT JOIN accounts a ON a.id = t.account_id
+               WHERE t.txn_date >= ?
+               ORDER BY t.txn_date DESC LIMIT ?""",
+            (cutoff, limit),
         ).fetchall()
         return [_txn_out(row_to_dict(r)) for r in rows]
 
@@ -1098,4 +1216,207 @@ def _connection_public(conn: dict) -> dict:
         "status": conn["status"],
         "connected_at": conn["connected_at"],
         "last_synced_at": conn.get("last_synced_at"),
+    }
+
+
+# --- Media ---
+
+def list_media(trip_id: Optional[str] = None) -> list[dict]:
+    with get_conn() as conn:
+        if trip_id:
+            rows = conn.execute(
+                """SELECT m.*, t.title AS trip_title FROM media_items m
+                   LEFT JOIN holiday_trips t ON t.id = m.trip_id
+                   WHERE m.trip_id = ? ORDER BY m.taken_at DESC, m.uploaded_at DESC""",
+                (trip_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT m.*, t.title AS trip_title FROM media_items m
+                   LEFT JOIN holiday_trips t ON t.id = m.trip_id
+                   ORDER BY m.taken_at DESC, m.uploaded_at DESC"""
+            ).fetchall()
+        return [_media_out(row_to_dict(r)) for r in rows]
+
+
+def get_media(media_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT m.*, t.title AS trip_title FROM media_items m
+               LEFT JOIN holiday_trips t ON t.id = m.trip_id WHERE m.id = ?""",
+            (media_id,),
+        ).fetchone()
+        return _media_out(row_to_dict(row)) if row else None
+
+
+def create_media(data: dict) -> dict:
+    mid = data.get("id") or _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO media_items
+               (id, title, caption, media_type, trip_id, file_name, file_path, mime_type, file_size, taken_at, uploaded_at, user_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                mid,
+                data["title"],
+                data.get("caption", ""),
+                data["media_type"],
+                data.get("trip_id") or None,
+                data.get("file_name"),
+                data.get("file_path"),
+                data.get("mime_type"),
+                data.get("file_size", 0),
+                data.get("taken_at") or "",
+                now,
+                data.get("user_id"),
+            ),
+        )
+    return get_media(mid)  # type: ignore[return-value]
+
+
+def update_media(media_id: str, data: dict) -> Optional[dict]:
+    with get_conn() as conn:
+        if "title" in data:
+            conn.execute("UPDATE media_items SET title = ? WHERE id = ?", (data["title"], media_id))
+        if "caption" in data:
+            conn.execute("UPDATE media_items SET caption = ? WHERE id = ?", (data["caption"], media_id))
+        if "trip_id" in data:
+            conn.execute("UPDATE media_items SET trip_id = ? WHERE id = ?", (data["trip_id"] or None, media_id))
+        if "taken_at" in data:
+            conn.execute("UPDATE media_items SET taken_at = ? WHERE id = ?", (data["taken_at"] or "", media_id))
+    return get_media(media_id)
+
+
+def delete_media(media_id: str) -> Optional[str]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT file_path FROM media_items WHERE id = ?", (media_id,)).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM media_items WHERE id = ?", (media_id,))
+        return row["file_path"]
+
+
+def _media_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "title": r["title"],
+        "caption": r.get("caption", ""),
+        "media_type": r["media_type"],
+        "trip_id": r.get("trip_id"),
+        "trip_title": r.get("trip_title"),
+        "file_name": r.get("file_name"),
+        "file_path": r.get("file_path"),
+        "mime_type": r.get("mime_type"),
+        "file_size": r.get("file_size", 0),
+        "taken_at": r.get("taken_at") or "",
+        "uploaded_at": r.get("uploaded_at"),
+        "user_id": r.get("user_id"),
+        "has_file": bool(r.get("file_path")),
+    }
+
+
+# --- Subscriptions ---
+
+def list_subscriptions(include_ignored: bool = True) -> list[dict]:
+    with get_conn() as conn:
+        if include_ignored:
+            rows = conn.execute("SELECT * FROM subscriptions ORDER BY amount DESC, display_name").fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM subscriptions WHERE status != 'ignored' ORDER BY amount DESC, display_name"
+            ).fetchall()
+        return [_subscription_out(row_to_dict(r)) for r in rows]
+
+
+def get_subscription(sub_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM subscriptions WHERE id = ?", (sub_id,)).fetchone()
+        return _subscription_out(row_to_dict(row)) if row else None
+
+
+def sync_subscriptions(detected: list[dict]) -> list[dict]:
+    now = _utcnow()
+    with get_conn() as conn:
+        for d in detected:
+            row = conn.execute(
+                "SELECT id, status FROM subscriptions WHERE merchant_key = ?",
+                (d["merchant_key"],),
+            ).fetchone()
+            if row and row["status"] == "ignored":
+                continue
+            if row:
+                conn.execute(
+                    """UPDATE subscriptions SET display_name = ?, amount = ?, frequency = ?,
+                       last_charge_date = ?, next_expected_date = ?, occurrence_count = ?,
+                       account = ?, category = ?, updated_at = ?
+                       WHERE merchant_key = ?""",
+                    (
+                        d["display_name"],
+                        d["amount"],
+                        d["frequency"],
+                        d.get("last_charge_date"),
+                        d.get("next_expected_date"),
+                        d["occurrence_count"],
+                        d.get("account", ""),
+                        d.get("category", "Subscriptions"),
+                        now,
+                        d["merchant_key"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO subscriptions
+                       (id, merchant_key, display_name, amount, frequency, status, category,
+                        last_charge_date, next_expected_date, occurrence_count, account, updated_at)
+                       VALUES (?, ?, ?, ?, ?, 'detected', ?, ?, ?, ?, ?, ?)""",
+                    (
+                        _new_id(),
+                        d["merchant_key"],
+                        d["display_name"],
+                        d["amount"],
+                        d["frequency"],
+                        d.get("category", "Subscriptions"),
+                        d.get("last_charge_date"),
+                        d.get("next_expected_date"),
+                        d["occurrence_count"],
+                        d.get("account", ""),
+                        now,
+                    ),
+                )
+    return list_subscriptions(include_ignored=True)
+
+
+def update_subscription(sub_id: str, data: dict) -> Optional[dict]:
+    now = _utcnow()
+    with get_conn() as conn:
+        row = conn.execute("SELECT id FROM subscriptions WHERE id = ?", (sub_id,)).fetchone()
+        if not row:
+            return None
+        if "status" in data:
+            conn.execute("UPDATE subscriptions SET status = ?, updated_at = ? WHERE id = ?", (data["status"], now, sub_id))
+        if "display_name" in data:
+            conn.execute("UPDATE subscriptions SET display_name = ?, updated_at = ? WHERE id = ?", (data["display_name"], now, sub_id))
+        if "notes" in data:
+            conn.execute("UPDATE subscriptions SET notes = ?, updated_at = ? WHERE id = ?", (data["notes"], now, sub_id))
+        if "category" in data:
+            conn.execute("UPDATE subscriptions SET category = ?, updated_at = ? WHERE id = ?", (data["category"], now, sub_id))
+    return get_subscription(sub_id)
+
+
+def _subscription_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "merchant_key": r["merchant_key"],
+        "display_name": r["display_name"],
+        "amount": r["amount"],
+        "frequency": r["frequency"],
+        "status": r["status"],
+        "category": r["category"],
+        "last_charge_date": r.get("last_charge_date"),
+        "next_expected_date": r.get("next_expected_date"),
+        "occurrence_count": r.get("occurrence_count", 0),
+        "account": r.get("account", ""),
+        "notes": r.get("notes", ""),
+        "updated_at": r.get("updated_at"),
     }

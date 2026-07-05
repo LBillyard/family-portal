@@ -55,10 +55,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from server.services import documents as doc_files
+    from server.services import documents as doc_files, media as media_files
 
     db.init_db()
     doc_files.ensure_upload_dir()
+    media_files.ensure_media_dir()
     logger.info("Database initialized at %s", db.DB_PATH)
     yield
     logger.info("Shutdown complete")

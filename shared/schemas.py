@@ -86,3 +86,17 @@ class HolidayIdeaRequest(BaseModel):
 class AssistantChatRequest(BaseModel):
     message: str
 
+
+class MediaUpdate(BaseModel):
+    title: Optional[str] = None
+    caption: Optional[str] = None
+    trip_id: Optional[str] = None
+    taken_at: Optional[str] = None
+
+
+class SubscriptionUpdate(BaseModel):
+    status: Optional[Literal["detected", "confirmed", "ignored"]] = None
+    display_name: Optional[str] = None
+    notes: Optional[str] = None
+    category: Optional[str] = None
+
