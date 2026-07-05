@@ -635,10 +635,12 @@ function openEditMemberModal(userId) {
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop"></div>
     <div class="wf-modal" role="dialog">
-      <div class="wf-modal-header"><h3>Edit ${esc(user.name)}</h3><p>Name and colour label used across the app.</p></div>
+      <div class="wf-modal-header"><h3>Edit ${esc(user.name)}</h3><p>Name, colour and WhatsApp number for reminders.</p></div>
       <div class="wf-modal-body">
         <label class="field field-full"><span>Name</span><input type="text" id="em-name" value="${esc(user.name)}"></label>
         <label class="field field-full"><span>Colour</span><input type="color" id="em-colour" value="${user.colour || '#00a89e'}"></label>
+        <label class="field field-full"><span>WhatsApp number</span><input type="tel" id="em-phone" value="${esc(user.phone || '')}" placeholder="+44 7911 123456"></label>
+        <p style="font-size:0.8125rem;color:var(--text-muted);margin:2px 2px 0">Used for the morning digest and two-way chat. Include the country code.</p>
       </div>
       <div class="wf-modal-footer">
         <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
@@ -653,6 +655,7 @@ function openEditMemberModal(userId) {
         body: JSON.stringify({
           name: document.getElementById('em-name').value.trim(),
           colour: document.getElementById('em-colour').value,
+          phone: document.getElementById('em-phone').value.trim(),
         }),
       });
       closeModal();
@@ -1672,6 +1675,25 @@ function renderSettings(data) {
       <button class="btn btn-sm btn-primary wf-action" data-action="connect-bank" style="margin-top:10px" ${bankOk ? '' : 'disabled'}>Connect Starling / Revolut / Amex / Virgin</button>
     </div>
     <div class="settings-section">
+      <h3>WhatsApp assistant</h3>
+      <p>Morning digest at 7am + two-way chat with the AI — ${integrations.whatsapp ? 'configured' : 'add WHATSAPP_* to .env (see setup)'}.</p>
+      ${users
+        .map(
+          (u) => `
+        <div class="connection-row">
+          <div class="connection-info">
+            <div class="connection-icon">💬</div>
+            <div>
+              <div class="connection-name">${userName(users, u.id)}</div>
+              <div class="connection-status ${u.phone ? 'connected' : ''}">${u.phone ? esc(u.phone) : 'No number — add via Edit on the Household card'}</div>
+            </div>
+          </div>
+        </div>`
+        )
+        .join('')}
+      <button class="btn btn-sm btn-primary wf-action" data-action="whatsapp-test" style="margin-top:10px" ${integrations.whatsapp ? '' : 'disabled title="Configure WhatsApp in .env first"'}>Send me a test digest</button>
+    </div>
+    <div class="settings-section">
       <h3>Email reminders</h3>
       <p>SMTP renewal alerts — ${integrations.email ? 'configured' : 'add SMTP_* and NOTIFY_EMAIL to .env'}.</p>
       <button class="btn btn-sm btn-primary wf-action" data-action="send-reminders" ${integrations.email ? '' : 'disabled'}>Send test reminders</button>
@@ -2182,6 +2204,13 @@ function initActions() {
           if (r.sent) showToast(`Sent reminder for ${r.count} item(s)`);
           else showToast(r.reason || 'No reminders sent');
         })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'whatsapp-test') {
+      showToast('Sending test digest…');
+      api('/whatsapp/test-digest', { method: 'POST' })
+        .then((r) => showToast(`Digest sent to ${r.sent_to}`))
         .catch((err) => showToast(err.message, true));
       return;
     }

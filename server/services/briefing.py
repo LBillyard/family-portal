@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 
 from server import database as db
@@ -83,3 +84,45 @@ def build_briefing(user: dict | None = None) -> dict:
         "recent_activity": activities,
         "finance": db.finance_summary(),
     }
+
+
+def _hhmm(s: str) -> str:
+    dt = _parse_dt(s)
+    if dt and "T" in (s or ""):
+        return dt.strftime("%H:%M") + " "
+    return ""
+
+
+def whatsapp_digest_line(user: dict | None = None) -> str:
+    """One-line, newline-free digest for a WhatsApp template variable ({{1}}).
+
+    Meta rejects template parameters containing newlines/tabs, so this uses
+    ' · ' between sections and ', ' between items. Kept under ~1000 chars."""
+    b = build_briefing(user)
+    today = date.fromisoformat(b["date"])
+    date_str = f"{today.strftime('%a')} {today.day} {today.strftime('%b')}"
+
+    parts: list[str] = []
+    evs = b["today_events"]
+    if evs:
+        items = ", ".join(f"{_hhmm(e['start'])}{e['title']}" for e in evs[:5])
+        parts.append(f"📅 {len(evs)} event(s): {items}")
+    appts = b["today_appointments"]
+    if appts:
+        items = ", ".join(f"{_hhmm(a['datetime'])}{a['title']}" for a in appts[:4])
+        parts.append(f"🩺 {items}")
+    tasks = b["due_tasks"]
+    if tasks:
+        parts.append("✅ due: " + ", ".join(t["title"] for t in tasks[:4]))
+    rn = b["urgent_renewals"]
+    if rn:
+        parts.append("🔔 " + ", ".join(f"{r['name']} ({r['days_until']}d)" for r in rn[:3]))
+    trip = b["next_trip"]
+    if trip and trip.get("days_until") is not None:
+        parts.append(f"✈️ {trip['title']} in {trip['days_until']}d")
+
+    if parts:
+        body = f"{date_str} — " + " · ".join(parts) + ". Reply to add or change anything."
+    else:
+        body = f"{date_str}: a clear day, nothing scheduled. Reply to add anything."
+    return re.sub(r"\s+", " ", body).strip()[:1000]

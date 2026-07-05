@@ -24,17 +24,24 @@ MAX_HISTORY = 24
 MAX_TOOL_ROUNDS = 8
 CONFIRM_TOOLS = {"log_transaction", "add_bill"}
 
-SYSTEM_PROMPT = """You are the Family Portal assistant for a UK household (two adults: Luke and Partner).
+SYSTEM_PROMPT = """You are the Family Portal assistant for a UK household (two adults: Luke and Laura).
 You can read household data and take actions using tools — calendar, tasks, appointments, holidays, bills, and transactions.
 
 Rules:
 - Use tools to perform actions; do not pretend something was done without calling a tool.
 - Dates/times in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM). Today is provided in context.
-- For calendar events, default to the requesting user unless they specify Luke or Partner.
+- For calendar events, default to the requesting user unless they specify Luke or Laura.
 - Amounts are in GBP. Expenses are negative when logging transactions.
-- Be concise, warm, and practical. Confirm what you did after using tools.
+- Be concise, warm, and practical. After using a tool, state plainly what you did so it can be corrected.
+- If the user says an entry is wrong or wants to undo/change it, use the update_* or delete_* tools to fix or remove it — prefer the id returned by the previous action, otherwise match by title.
 - If a request is ambiguous, ask one short clarifying question instead of guessing.
 - You cannot connect banks or upload files — tell the user to use Finances or Vault tabs."""
+
+# Appended when the conversation is happening over WhatsApp (act-then-confirm model).
+WHATSAPP_NOTE = """
+
+You are replying over WhatsApp text. Keep replies short (1-3 sentences, no markdown).
+Act immediately on clear instructions, then confirm what you did in one line (e.g. "Booked Dentist, Tue 8 Jul 3pm"). If they reply that it's wrong, correct or undo it with the update_*/delete_* tools."""
 
 TOOLS: list[dict] = [
     {
@@ -69,7 +76,7 @@ TOOLS: list[dict] = [
                     "end": {"type": "string"},
                     "all_day": {"type": "boolean"},
                     "location": {"type": "string"},
-                    "for_user": {"type": "string", "enum": ["luke", "partner", "both"], "description": "Who the event is for"},
+                    "for_user": {"type": "string", "enum": ["luke", "laura", "both"], "description": "Who the event is for"},
                 },
                 "required": ["title", "start"],
             },
@@ -84,7 +91,7 @@ TOOLS: list[dict] = [
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
-                    "assignee": {"type": "string", "enum": ["luke", "partner", "either"]},
+                    "assignee": {"type": "string", "enum": ["luke", "laura", "either"]},
                     "due_date": {"type": "string", "description": "YYYY-MM-DD"},
                     "priority": {"type": "string", "enum": ["high", "medium", "low"]},
                 },
@@ -119,7 +126,7 @@ TOOLS: list[dict] = [
                     "datetime": {"type": "string", "description": "ISO datetime"},
                     "category": {"type": "string", "enum": ["health", "dental", "vet", "other"]},
                     "location": {"type": "string"},
-                    "for_user": {"type": "string", "enum": ["luke", "partner"]},
+                    "for_user": {"type": "string", "enum": ["luke", "laura"]},
                 },
                 "required": ["title", "provider", "datetime"],
             },
@@ -253,6 +260,113 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_calendar_event",
+            "description": "Change an existing calendar event's time, title or location (use to correct one you just created). Identify by event_id (preferred, from a prior result) or title_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string"},
+                    "title_contains": {"type": "string"},
+                    "title": {"type": "string", "description": "New title"},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                    "all_day": {"type": "boolean"},
+                    "location": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_calendar_event",
+            "description": "Delete/undo/cancel a calendar event by event_id (preferred) or title_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string"},
+                    "title_contains": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_appointment",
+            "description": "Change an existing appointment's time/provider/title/location. Identify by appointment_id (preferred) or title_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "appointment_id": {"type": "string"},
+                    "title_contains": {"type": "string"},
+                    "title": {"type": "string"},
+                    "provider": {"type": "string"},
+                    "datetime": {"type": "string"},
+                    "location": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_appointment",
+            "description": "Cancel/delete/undo an appointment by appointment_id (preferred) or title_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "appointment_id": {"type": "string"},
+                    "title_contains": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_task",
+            "description": "Delete/undo a task by task_id (preferred) or title_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "title_contains": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_transaction",
+            "description": "Delete/undo a logged transaction (reverses the balance) by transaction_id (preferred) or description_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "transaction_id": {"type": "string"},
+                    "description_contains": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_bill",
+            "description": "Delete/undo a bill by bill_id (preferred) or name_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bill_id": {"type": "string"},
+                    "name_contains": {"type": "string"},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -263,31 +377,56 @@ def is_configured() -> bool:
 def _resolve_user(for_user: str | None, default_id: str) -> str:
     if not for_user or for_user == "both":
         return default_id
-    name_map = {u["name"].lower(): u["id"] for u in db.list_users()}
-    return name_map.get(for_user.lower(), for_user if for_user in ("luke", "partner") else default_id)
+    fu = for_user.lower()
+    users = db.list_users()
+    name_map = {u["name"].lower(): u["id"] for u in users}
+    if fu in name_map:
+        return name_map[fu]
+    if fu in {u["id"] for u in users}:
+        return fu
+    return default_id
 
 
 def _resolve_assignee(name: str | None) -> str | None:
-    if not name or name == "either":
+    if not name or name in ("either", "both"):
         return None
-    name_map = {u["name"].lower(): u["id"] for u in db.list_users()}
-    return name_map.get(name.lower(), name)
+    fu = name.lower()
+    users = db.list_users()
+    name_map = {u["name"].lower(): u["id"] for u in users}
+    if fu in name_map:
+        return name_map[fu]
+    if fu in {u["id"] for u in users}:
+        return fu
+    return None
 
 
-def get_history(user_id: str) -> list[dict]:
-    raw = db.get_setting(f"assistant_history_{user_id}", "[]")
+def _match_id(items: list[dict], field: str, needle: str | None) -> str | None:
+    if not needle:
+        return None
+    n = needle.lower()
+    match = next((it for it in items if n in (it.get(field) or "").lower()), None)
+    return match["id"] if match else None
+
+
+def _hist_key(user_id: str, channel: str) -> str:
+    # Web keeps the original key (preserve existing history); other channels namespace separately.
+    return f"assistant_history_{user_id}" if channel == "web" else f"assistant_history_{channel}_{user_id}"
+
+
+def get_history(user_id: str, channel: str = "web") -> list[dict]:
+    raw = db.get_setting(_hist_key(user_id, channel), "[]")
     try:
         return json.loads(raw)[-MAX_HISTORY:]
     except json.JSONDecodeError:
         return []
 
 
-def save_history(user_id: str, messages: list[dict]) -> None:
-    db.set_setting(f"assistant_history_{user_id}", json.dumps(messages[-MAX_HISTORY:]))
+def save_history(user_id: str, messages: list[dict], channel: str = "web") -> None:
+    db.set_setting(_hist_key(user_id, channel), json.dumps(messages[-MAX_HISTORY:]))
 
 
-def clear_history(user_id: str) -> None:
-    db.set_setting(f"assistant_history_{user_id}", "[]")
+def clear_history(user_id: str, channel: str = "web") -> None:
+    db.set_setting(_hist_key(user_id, channel), "[]")
 
 
 def build_context(user: dict) -> str:
@@ -480,6 +619,56 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 return {"ok": False, "error": "Trip not found"}
             packing = trips_svc.add_packing_list(trip["id"], args.get("template", "default"))
             return {"ok": True, "trip_id": trip["id"], "packing": packing}
+        if name == "update_calendar_event":
+            eid = args.get("event_id") or _match_id(db.list_events(), "title", args.get("title_contains"))
+            if not eid:
+                return {"ok": False, "error": "Event not found"}
+            patch = {k: args[k] for k in ("title", "start", "end", "location") if args.get(k) is not None}
+            if args.get("all_day") is not None:
+                patch["all_day"] = bool(args["all_day"])
+            event = db.update_event(eid, patch)
+            if event:
+                activity_log.log(user, "updated", "event", f"Updated event: {event['title']}", entity_id=eid)
+                return {"ok": True, "event": event}
+            return {"ok": False, "error": "Event not found"}
+        if name == "delete_calendar_event":
+            eid = args.get("event_id") or _match_id(db.list_events(), "title", args.get("title_contains"))
+            ok = db.delete_event(eid) if eid else False
+            if ok:
+                activity_log.log(user, "deleted", "event", "Removed calendar event", entity_id=eid)
+            return {"ok": ok} if ok else {"ok": False, "error": "Event not found"}
+        if name == "update_appointment":
+            aid = args.get("appointment_id") or _match_id(db.list_appointments(), "title", args.get("title_contains"))
+            if not aid:
+                return {"ok": False, "error": "Appointment not found"}
+            patch = {k: args[k] for k in ("title", "provider", "datetime", "location") if args.get(k) is not None}
+            appt = db.update_appointment(aid, patch)
+            if appt:
+                activity_log.log(user, "updated", "appointment", f"Updated appointment: {appt['title']}", entity_id=aid)
+                return {"ok": True, "appointment": appt}
+            return {"ok": False, "error": "Appointment not found"}
+        if name == "cancel_appointment":
+            aid = args.get("appointment_id") or _match_id(db.list_appointments(), "title", args.get("title_contains"))
+            ok = db.delete_appointment(aid) if aid else False
+            if ok:
+                activity_log.log(user, "deleted", "appointment", "Cancelled appointment", entity_id=aid)
+            return {"ok": ok} if ok else {"ok": False, "error": "Appointment not found"}
+        if name == "delete_task":
+            tid = args.get("task_id") or _match_id(db.list_tasks(), "title", args.get("title_contains"))
+            ok = db.delete_task(tid) if tid else False
+            return {"ok": ok} if ok else {"ok": False, "error": "Task not found"}
+        if name == "delete_transaction":
+            txn_id = args.get("transaction_id") or _match_id(db.list_transactions(), "description", args.get("description_contains"))
+            ok = db.delete_transaction(txn_id) if txn_id else False
+            if ok:
+                activity_log.log(user, "deleted", "transaction", "Removed transaction", entity_id=txn_id)
+            return {"ok": ok} if ok else {"ok": False, "error": "Transaction not found"}
+        if name == "delete_bill":
+            bid = args.get("bill_id") or _match_id(db.list_bills(), "name", args.get("name_contains"))
+            ok = db.delete_bill(bid) if bid else False
+            if ok:
+                activity_log.log(user, "deleted", "bill", "Removed bill", entity_id=bid)
+            return {"ok": ok} if ok else {"ok": False, "error": "Bill not found"}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)
@@ -533,15 +722,21 @@ async def _call_openrouter(messages: list[dict]) -> dict:
         return resp.json()
 
 
-async def chat(user: dict, message: str) -> dict:
+async def chat(user: dict, message: str, channel: str = "web") -> dict:
     text = (message or "").strip()
     if not text:
         raise ValueError("Message is required")
 
-    history = get_history(user["id"])
+    # Off-web channels (WhatsApp) act immediately and rely on undo, rather than
+    # parking money tools behind an in-app Confirm button the user can't reach.
+    auto_confirm = channel != "web"
+
+    history = get_history(user["id"], channel)
     history.append({"role": "user", "content": text})
 
     system = f"{SYSTEM_PROMPT}\n\nContext JSON:\n{build_context(user)}"
+    if channel == "whatsapp":
+        system = f"{SYSTEM_PROMPT}{WHATSAPP_NOTE}\n\nContext JSON:\n{build_context(user)}"
     messages: list[dict] = [{"role": "system", "content": system}]
     for h in history:
         if h["role"] in ("user", "assistant") and h.get("content"):
@@ -563,12 +758,12 @@ async def chat(user: dict, message: str) -> dict:
                     tool_args = json.loads(fn.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     tool_args = {}
-                result = await execute_tool(tool_name, tool_args, user)
+                result = await execute_tool(tool_name, tool_args, user, confirmed=auto_confirm)
                 actions.append({"tool": tool_name, "args": tool_args, "result": result})
                 if result.get("needs_confirmation"):
                     reply = f"I need your confirmation: {result['summary']}. Open the assistant or use Confirm in the app."
                     history.append({"role": "assistant", "content": reply})
-                    save_history(user["id"], history)
+                    save_history(user["id"], history, channel)
                     return {
                         "reply": reply,
                         "actions": actions,
@@ -588,10 +783,10 @@ async def chat(user: dict, message: str) -> dict:
 
         reply = (choice.get("content") or "").strip() or "Done."
         history.append({"role": "assistant", "content": reply})
-        save_history(user["id"], history)
+        save_history(user["id"], history, channel)
         return {"reply": reply, "actions": actions, "data_changed": data_changed}
 
     reply = "I need to break this into smaller steps — what should we do first?"
     history.append({"role": "assistant", "content": reply})
-    save_history(user["id"], history)
+    save_history(user["id"], history, channel)
     return {"reply": reply, "actions": actions, "data_changed": data_changed}

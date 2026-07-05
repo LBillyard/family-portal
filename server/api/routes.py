@@ -1,5 +1,6 @@
 """REST API routes."""
 
+import json
 import logging
 import secrets
 import time
@@ -9,14 +10,14 @@ from urllib.parse import quote
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 
 from server import auth, database as db
 from server.services import csv_import, dashboard as dash, documents as doc_files, google_calendar, openrouter, open_banking
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
-from server.services import search as search_svc, trips as trips_svc, categorize as cz
+from server.services import search as search_svc, trips as trips_svc, categorize as cz, whatsapp as whatsapp_svc
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
@@ -178,6 +179,93 @@ def calendar_sync(_: dict = Depends(require_user)):
         raise HTTPException(status_code=503, detail="Google Calendar not configured")
     results = google_calendar.sync_all()
     return {"synced": results, "google_last": db.get_setting("google_last_sync", "just now")}
+
+
+# --- WhatsApp (Meta Cloud API) ---
+
+# In-memory de-dupe of processed inbound message ids (Meta may re-deliver).
+_whatsapp_seen: set[str] = set()
+
+
+@router.get("/whatsapp/webhook")
+def whatsapp_verify(request: Request):
+    """Meta webhook verification handshake (public, no auth)."""
+    params = request.query_params
+    challenge = whatsapp_svc.verify_webhook(
+        params.get("hub.mode", ""),
+        params.get("hub.verify_token", ""),
+        params.get("hub.challenge", ""),
+    )
+    if challenge is None:
+        raise HTTPException(status_code=403, detail="Verification failed")
+    return PlainTextResponse(challenge)
+
+
+@router.post("/whatsapp/webhook")
+async def whatsapp_receive(request: Request):
+    """Inbound messages from Meta (public, verified by signature + number allowlist)."""
+    raw = await request.body()
+    if not whatsapp_svc.verify_signature(raw, request.headers.get("X-Hub-Signature-256")):
+        raise HTTPException(status_code=403, detail="Bad signature")
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except Exception:
+        return {"ok": True}
+    for msg in whatsapp_svc.parse_inbound(payload):
+        mid = msg.get("id")
+        if mid and mid in _whatsapp_seen:
+            continue
+        if mid:
+            _whatsapp_seen.add(mid)
+        await _handle_whatsapp_message(msg)
+    return {"ok": True}
+
+
+async def _handle_whatsapp_message(msg: dict) -> None:
+    frm = msg.get("from", "")
+    text = (msg.get("text") or "").strip()
+    if not frm or not text:
+        return
+    user = db.get_user_by_phone(frm)
+    if not user:
+        # Unknown number — ignore silently (don't reply to strangers).
+        logger.warning("WhatsApp message from unlinked number %s — ignoring", frm)
+        return
+    try:
+        if not ai_assistant.is_configured():
+            await whatsapp_svc.send_text(frm, "The assistant isn't set up yet — add OPENROUTER_API_KEY.")
+            return
+        result = await ai_assistant.chat(user, text, channel="whatsapp")
+        reply = (result.get("reply") or "Done.").strip()
+    except Exception:
+        logger.exception("WhatsApp AI handling failed")
+        reply = "Sorry — something went wrong handling that. Try again?"
+    try:
+        await whatsapp_svc.send_text(frm, reply)
+    except Exception:
+        logger.exception("Failed to send WhatsApp reply to %s", frm)
+
+
+@router.get("/whatsapp/status")
+def whatsapp_status(_: dict = Depends(require_user)):
+    return {"configured": whatsapp_svc.is_configured()}
+
+
+@router.post("/whatsapp/test-digest")
+async def whatsapp_test_digest(user: dict = Depends(require_user)):
+    """Send the current user their digest now (for testing)."""
+    if not whatsapp_svc.is_configured():
+        raise HTTPException(status_code=503, detail="WhatsApp not configured — add WHATSAPP_* to .env")
+    full = db.get_user(user["id"])
+    phone = (full or {}).get("phone")
+    if not phone:
+        raise HTTPException(status_code=400, detail="Add your phone number in Settings → Household first")
+    line = briefing_svc.whatsapp_digest_line(full)
+    try:
+        await whatsapp_svc.send_template(phone, line)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"ok": True, "sent_to": phone, "preview": line}
 
 
 @router.get("/integrations")
@@ -1028,6 +1116,7 @@ def api_settings(_: dict = Depends(require_user)):
             "email": notify_svc.is_configured(),
             "google_writeback": google_calendar.is_configured(),
             "receipt_scan": openrouter.is_configured(),
+            "whatsapp": whatsapp_svc.is_configured(),
         },
         "notification_log": db.list_notification_log(10),
     }

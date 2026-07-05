@@ -99,6 +99,7 @@ class TripUpdate(BaseModel):
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
     colour: Optional[str] = None
+    phone: Optional[str] = None
 
 
 class TransferCreate(BaseModel):

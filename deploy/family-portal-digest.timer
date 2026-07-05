@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Family Portal morning digest at 07:00 Europe/London
+
+[Timer]
+# Timezone-aware: fires at 07:00 UK local time (handles BST/GMT automatically).
+OnCalendar=*-*-* 07:00:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target

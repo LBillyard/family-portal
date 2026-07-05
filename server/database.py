@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -478,6 +479,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )"""
     )
 
+    ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "phone" not in ucols:
+        conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+
     maint_count = conn.execute("SELECT COUNT(*) AS c FROM maintenance_items").fetchone()["c"]
     if maint_count == 0:
         now = _utcnow()
@@ -694,8 +699,25 @@ def user_public(u: dict) -> dict:
         "name": u["name"],
         "email": u["email"],
         "colour": u["colour"],
+        "phone": u.get("phone"),
         "google_connected": bool(u.get("google_token_json")),
     }
+
+
+def _phone_digits(s: str | None) -> str:
+    return re.sub(r"\D", "", s or "")
+
+
+def get_user_by_phone(phone: str) -> Optional[dict]:
+    """Match an inbound WhatsApp number (e.g. '447911...') to a portal user by
+    the last 9 significant digits, so 0/+44 prefixes don't matter."""
+    target = _phone_digits(phone)[-9:]
+    if not target:
+        return None
+    for u in list_users():
+        if u.get("phone") and _phone_digits(u["phone"])[-9:] == target:
+            return get_user(u["id"])
+    return None
 
 
 def update_user(user_id: str, data: dict) -> Optional[dict]:
@@ -707,6 +729,9 @@ def update_user(user_id: str, data: dict) -> Optional[dict]:
     if data.get("colour"):
         fields.append("colour = ?")
         values.append(data["colour"])
+    if "phone" in data:
+        fields.append("phone = ?")
+        values.append((data["phone"] or "").strip() or None)
     with get_conn() as conn:
         if not conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone():
             return None
@@ -743,6 +768,32 @@ def create_event(data: dict, user_id: str) -> dict:
         )
         row = conn.execute("SELECT * FROM events WHERE id = ?", (eid,)).fetchone()
         return _event_out(row_to_dict(row))
+
+
+def update_event(event_id: str, data: dict) -> Optional[dict]:
+    mapping = {"title": "title", "start": "start_at", "end": "end_at", "location": "location", "user_id": "user_id"}
+    fields, values = [], []
+    for key, col in mapping.items():
+        if data.get(key) is not None:
+            fields.append(f"{col} = ?")
+            values.append(data[key])
+    if data.get("all_day") is not None:
+        fields.append("all_day = ?")
+        values.append(int(bool(data["all_day"])))
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM events WHERE id = ?", (event_id,)).fetchone():
+            return None
+        if fields:
+            values.append(event_id)
+            conn.execute(f"UPDATE events SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        return _event_out(row_to_dict(row))
+
+
+def delete_event(event_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        return cur.rowcount > 0
 
 
 def _event_out(r: dict) -> dict:
@@ -783,6 +834,12 @@ def mark_bill_paid(bill_id: str) -> Optional[dict]:
         conn.execute("UPDATE bills SET paid = 1, paid_at = ? WHERE id = ?", (_utcnow(), bill_id))
         row = conn.execute("SELECT * FROM bills WHERE id = ?", (bill_id,)).fetchone()
         return _bill_out(row_to_dict(row)) if row else None
+
+
+def delete_bill(bill_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM bills WHERE id = ?", (bill_id,))
+        return cur.rowcount > 0
 
 
 def _bill_out(r: dict) -> dict:
@@ -846,6 +903,17 @@ def create_transaction(data: dict) -> dict:
             (tid,),
         ).fetchone()
         return _txn_out(row_to_dict(row))
+
+
+def delete_transaction(txn_id: str) -> bool:
+    """Delete a transaction and reverse its effect on the account balance."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT account_id, amount FROM transactions WHERE id = ?", (txn_id,)).fetchone()
+        if not row:
+            return False
+        conn.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (row["amount"], row["account_id"]))
+        conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
+        return True
 
 
 def _txn_out(r: dict) -> dict:
@@ -1079,6 +1147,12 @@ def create_task(data: dict) -> dict:
         )
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
         return _task_out(row_to_dict(row))
+
+
+def delete_task(task_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        return cur.rowcount > 0
 
 
 def update_task(task_id: str, data: dict) -> Optional[dict]:
