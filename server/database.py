@@ -276,6 +276,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("external_id", "ALTER TABLE accounts ADD COLUMN external_id TEXT"),
         ("linked", "ALTER TABLE accounts ADD COLUMN linked INTEGER NOT NULL DEFAULT 0"),
         ("last_synced_at", "ALTER TABLE accounts ADD COLUMN last_synced_at TEXT"),
+        ("name_custom", "ALTER TABLE accounts ADD COLUMN name_custom INTEGER NOT NULL DEFAULT 0"),
+        ("hidden", "ALTER TABLE accounts ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"),
     ]:
         if col not in cols:
             conn.execute(ddl)
@@ -286,6 +288,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_external_id ON transactions(external_id) WHERE external_id IS NOT NULL"
         )
+    for col, ddl in [
+        ("hidden", "ALTER TABLE transactions ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"),
+        ("merchant_key", "ALTER TABLE transactions ADD COLUMN merchant_key TEXT"),
+    ]:
+        if col not in tcols:
+            conn.execute(ddl)
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS merchant_rules (
+            merchant_key TEXT PRIMARY KEY,
+            category TEXT NOT NULL,
+            display_name TEXT,
+            source TEXT NOT NULL DEFAULT 'user',
+            updated_at TEXT NOT NULL
+        )"""
+    )
 
     dcols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
     for col, ddl in [
@@ -764,11 +782,15 @@ def _bill_out(r: dict) -> dict:
 
 # --- Transactions ---
 
-def list_transactions(limit: int = 50) -> list[dict]:
+def list_transactions(limit: int = 50, include_hidden: bool = False) -> list[dict]:
+    where = "" if include_hidden else "WHERE t.hidden = 0"
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT t.*, a.name AS account_name FROM transactions t
+            f"""SELECT t.*, a.name AS account_name, m.display_name AS merchant_display
+               FROM transactions t
                LEFT JOIN accounts a ON a.id = t.account_id
+               LEFT JOIN merchant_rules m ON m.merchant_key = t.merchant_key
+               {where}
                ORDER BY t.txn_date DESC LIMIT ?""",
             (limit,),
         ).fetchall()
@@ -781,7 +803,7 @@ def list_transactions_for_analysis(limit: int = 1000) -> list[dict]:
         rows = conn.execute(
             """SELECT t.*, a.name AS account_name FROM transactions t
                LEFT JOIN accounts a ON a.id = t.account_id
-               WHERE t.txn_date >= ?
+               WHERE t.txn_date >= ? AND t.hidden = 0
                ORDER BY t.txn_date DESC LIMIT ?""",
             (cutoff, limit),
         ).fetchall()
@@ -813,23 +835,51 @@ def _txn_out(r: dict) -> dict:
         "id": r["id"],
         "date": r["txn_date"],
         "description": r["description"],
+        "display_name": r.get("merchant_display") or r["description"],
+        "merchant_key": r.get("merchant_key"),
         "category": r["category"],
         "amount": r["amount"],
         "account": r.get("account_name") or r.get("account_id", ""),
     }
 
 
+def get_transaction(txn_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM transactions WHERE id = ?", (txn_id,)).fetchone()
+        return row_to_dict(row) if row else None
+
+
 # --- Accounts & budgets ---
 
-def list_accounts() -> list[dict]:
+def list_accounts(include_hidden: bool = False) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM accounts ORDER BY linked DESC, name").fetchall()
         result = []
         for r in rows:
             d = row_to_dict(r)
             d["linked"] = bool(d.get("linked"))
+            d["name_custom"] = bool(d.get("name_custom"))
+            d["hidden"] = bool(d.get("hidden"))
+            if d["hidden"] and not include_hidden:
+                continue
             result.append(d)
         return result
+
+
+def rename_account(account_id: str, name: str) -> Optional[dict]:
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM accounts WHERE id = ?", (account_id,)).fetchone():
+            return None
+        conn.execute("UPDATE accounts SET name = ?, name_custom = 1 WHERE id = ?", (name.strip(), account_id))
+    return next((a for a in list_accounts(include_hidden=True) if a["id"] == account_id), None)
+
+
+def set_account_hidden(account_id: str, hidden: bool) -> Optional[dict]:
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM accounts WHERE id = ?", (account_id,)).fetchone():
+            return None
+        conn.execute("UPDATE accounts SET hidden = ? WHERE id = ?", (1 if hidden else 0, account_id))
+    return next((a for a in list_accounts(include_hidden=True) if a["id"] == account_id), None)
 
 
 def list_budgets() -> list[dict]:
@@ -841,7 +891,7 @@ def list_budgets() -> list[dict]:
             d = row_to_dict(r)
             spent_row = conn.execute(
                 """SELECT COALESCE(SUM(ABS(amount)), 0) AS s FROM transactions
-                   WHERE category = ? AND amount < 0 AND txn_date LIKE ?""",
+                   WHERE category = ? AND amount < 0 AND hidden = 0 AND txn_date LIKE ?""",
                 (d["category"], f"{month_prefix}%"),
             ).fetchone()
             result.append({
@@ -881,6 +931,116 @@ def finance_summary() -> dict:
             "joint_balance": round(current_total, 2),
             "savings_total": round(savings, 2),
         }
+
+
+# --- Transaction categorisation (rules + learned overrides + AI) ---
+
+def get_merchant_rules() -> dict[str, dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT merchant_key, category, display_name FROM merchant_rules").fetchall()
+        return {r["merchant_key"]: {"category": r["category"], "display_name": r["display_name"]} for r in rows}
+
+
+def upsert_merchant_rule(merchant_key: str, category: str, display_name: Optional[str], source: str = "user") -> None:
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO merchant_rules (merchant_key, category, display_name, source, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(merchant_key) DO UPDATE SET
+                 category = excluded.category,
+                 display_name = COALESCE(excluded.display_name, merchant_rules.display_name),
+                 source = excluded.source, updated_at = excluded.updated_at""",
+            (merchant_key, category, display_name, source, now),
+        )
+
+
+def apply_categorization() -> dict:
+    """Re-derive category/merchant_key/hidden for all transactions.
+    Learned rules win; then built-in rules; already-friendly categories are preserved."""
+    from server.services import categorize as cz
+
+    learned = {k: v["category"] for k, v in get_merchant_rules().items()}
+    counts: dict[str, int] = {}
+    with get_conn() as conn:
+        rows = conn.execute("SELECT id, description, amount, category FROM transactions").fetchall()
+        for r in rows:
+            key = cz.normalize_merchant(r["description"])
+            if key in learned:
+                cat = learned[key]
+            else:
+                rc = cz.rule_category(r["description"])
+                if rc:
+                    cat = rc
+                elif r["category"] in cz.CATEGORIES:
+                    cat = r["category"]
+                elif (r["amount"] or 0) > 0:
+                    cat = "Income"
+                else:
+                    cat = "Other"
+            hidden = 1 if cat in cz.HIDDEN_CATEGORIES else 0
+            conn.execute(
+                "UPDATE transactions SET category = ?, merchant_key = ?, hidden = ? WHERE id = ?",
+                (cat, key, hidden, r["id"]),
+            )
+            counts[cat] = counts.get(cat, 0) + 1
+    return {"updated": sum(counts.values()), "by_category": counts}
+
+
+def learn_and_reclassify(merchant_key: str, category: str, display_name: Optional[str] = None, source: str = "user") -> int:
+    """Save a merchant rule and re-apply it to every matching transaction."""
+    from server.services import categorize as cz
+
+    upsert_merchant_rule(merchant_key, category, display_name, source)
+    hidden = 1 if category in cz.HIDDEN_CATEGORIES else 0
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE transactions SET category = ?, hidden = ? WHERE merchant_key = ?",
+            (category, hidden, merchant_key),
+        )
+        return cur.rowcount
+
+
+def set_transaction_category(txn_id: str, category: str) -> Optional[dict]:
+    from server.services import categorize as cz
+
+    hidden = 1 if category in cz.HIDDEN_CATEGORIES else 0
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM transactions WHERE id = ?", (txn_id,)).fetchone():
+            return None
+        conn.execute("UPDATE transactions SET category = ?, hidden = ? WHERE id = ?", (category, hidden, txn_id))
+    return get_transaction(txn_id)
+
+
+def category_breakdown() -> list[dict]:
+    """This month's spending grouped by category, excluding hidden + non-spend buckets."""
+    from server.services import categorize as cz
+
+    month_prefix = date.today().strftime("%Y-%m")
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT category, COALESCE(SUM(ABS(amount)), 0) AS spent, COUNT(*) AS n
+               FROM transactions
+               WHERE hidden = 0 AND amount < 0 AND txn_date LIKE ?
+               GROUP BY category ORDER BY spent DESC""",
+            (f"{month_prefix}%",),
+        ).fetchall()
+        return [
+            {"category": r["category"], "spent": round(r["spent"], 2), "count": r["n"]}
+            for r in rows
+            if r["category"] not in cz.NON_SPEND_CATEGORIES
+        ]
+
+
+def get_uncategorized_merchants(limit: int = 60) -> list[str]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT description FROM transactions
+               WHERE hidden = 0 AND category = 'Other'
+               GROUP BY UPPER(description) ORDER BY COUNT(*) DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [r["description"] for r in rows]
 
 
 # --- Tasks ---
@@ -1387,10 +1547,17 @@ def upsert_linked_account(
             (connection_id, external_id),
         ).fetchone()
         if row:
-            conn.execute(
-                "UPDATE accounts SET name = ?, type = ?, institution = ?, linked = 1 WHERE id = ?",
-                (name, account_type, institution, row["id"]),
-            )
+            existing = conn.execute("SELECT name_custom FROM accounts WHERE id = ?", (row["id"],)).fetchone()
+            if existing and existing["name_custom"]:
+                conn.execute(
+                    "UPDATE accounts SET type = ?, institution = ?, linked = 1 WHERE id = ?",
+                    (account_type, institution, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE accounts SET name = ?, type = ?, institution = ?, linked = 1 WHERE id = ?",
+                    (name, account_type, institution, row["id"]),
+                )
             return row["id"]
 
         aid = _new_id()
@@ -1412,34 +1579,29 @@ def set_account_balance(account_id: str, balance: float) -> None:
 
 
 def import_external_transactions(rows: list[dict]) -> int:
-    """Insert bank-synced transactions, skipping duplicates by external_id."""
+    """Insert bank-synced transactions (auto-categorised), skipping duplicates by external_id."""
+    from server.services import categorize as cz
+
+    learned = {k: v["category"] for k, v in get_merchant_rules().items()}
     now = _utcnow()
     count = 0
     with get_conn() as conn:
         for row in rows:
             ext = row.get("external_id")
             if ext:
-                exists = conn.execute(
-                    "SELECT id FROM transactions WHERE external_id = ?",
-                    (ext,),
-                ).fetchone()
-                if exists:
+                if conn.execute("SELECT id FROM transactions WHERE external_id = ?", (ext,)).fetchone():
                     continue
+            desc = row["description"]
+            amount = row["amount"]
+            key = cz.normalize_merchant(desc)
+            cat = cz.categorize(desc, amount, learned)
+            hidden = 1 if cat in cz.HIDDEN_CATEGORIES else 0
             tid = _new_id()
             conn.execute(
                 """INSERT INTO transactions
-                   (id, account_id, description, category, amount, txn_date, created_at, external_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    tid,
-                    row["account_id"],
-                    row["description"],
-                    row.get("category", "Bank"),
-                    row["amount"],
-                    row["date"],
-                    now,
-                    ext,
-                ),
+                   (id, account_id, description, category, amount, txn_date, created_at, external_id, merchant_key, hidden)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (tid, row["account_id"], desc, cat, amount, row["date"], now, ext, key, hidden),
             )
             count += 1
     return count

@@ -109,6 +109,16 @@ class TransferCreate(BaseModel):
     note: Optional[str] = None
 
 
+class AccountUpdate(BaseModel):
+    name: Optional[str] = None
+    hidden: Optional[bool] = None
+
+
+class TransactionCategoryUpdate(BaseModel):
+    category: str
+    learn: bool = True
+
+
 class DocumentCreate(BaseModel):
     name: str
     category: str = "other"

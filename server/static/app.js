@@ -725,6 +725,65 @@ function openChangePasswordModal() {
   };
 }
 
+function openRenameAccountModal(accountId, currentName) {
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Rename account</h3><p>Give this account a name you'll recognise. Bank syncs won't overwrite it.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Account name</span><input type="text" id="ra-name" value="${esc(currentName)}"></label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="ra-save">Save</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('ra-save').onclick = async () => {
+    const name = document.getElementById('ra-name').value.trim();
+    if (!name) return showToast('Enter a name', true);
+    try {
+      await api(`/accounts/${accountId}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+      closeModal();
+      showToast('Account renamed');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
+async function openHiddenAccountsModal() {
+  try {
+    const data = await api('/accounts?include_hidden=true');
+    const hidden = (data.accounts || []).filter((a) => a.hidden);
+    const rows = hidden.length
+      ? hidden
+          .map(
+            (a) => `
+        <div class="connection-row">
+          <div class="connection-info"><div>
+            <div class="connection-name">${esc(a.name)}</div>
+            <div class="connection-status">${esc(a.institution)} · ${fmt.gbp(a.balance)}</div>
+          </div></div>
+          <button class="btn btn-sm btn-primary wf-action" data-action="unhide-account" data-account-id="${a.id}">Unhide</button>
+        </div>`
+          )
+          .join('')
+      : '<p class="hint-small">No hidden accounts.</p>';
+    document.getElementById('modal-root').innerHTML = `
+      <div class="modal-backdrop" id="modal-backdrop"></div>
+      <div class="wf-modal" role="dialog">
+        <div class="wf-modal-header"><h3>Hidden accounts</h3><p>Restore an account to the finances view.</p></div>
+        <div class="wf-modal-body">${rows}</div>
+        <div class="wf-modal-footer"><button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Close</button></div>
+      </div>`;
+    document.getElementById('modal-backdrop').onclick = closeModal;
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 function switchTab(tabId) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.classList.toggle('active', t.dataset.tab === tabId);
@@ -1016,7 +1075,7 @@ function renderCalendar(data) {
 }
 
 function renderFinances(data) {
-  const { bills, transactions, accounts, budgets, savings_goals, summary, connections = [], banking_configured } = data;
+  const { bills, transactions, accounts, budgets, savings_goals, summary, connections = [], banking_configured, categories = [], category_breakdown = [] } = data;
 
   document.getElementById('finance-stats').innerHTML = `
     <div class="stat"><span>${fmt.gbp(summary.monthly_income)}</span><label>Monthly income</label><div class="stat-trend up">All accounts</div></div>
@@ -1063,9 +1122,13 @@ function renderFinances(data) {
       <div class="account-tile-name">${esc(a.name)}${a.linked ? ' <span class="linked-badge">Live</span>' : ''}</div>
       <div class="account-tile-balance">${fmt.gbp(a.balance)}</div>
       <div class="account-tile-inst">${esc(a.institution)}</div>
+      <div class="account-tile-actions">
+        <button class="acct-btn wf-action" data-action="rename-account" data-account-id="${a.id}" data-account-name="${esc(a.name)}">Rename</button>
+        <button class="acct-btn wf-action" data-action="hide-account" data-account-id="${a.id}">Hide</button>
+      </div>
     </div>`
     )
-    .join('');
+    .join('') + '<button class="acct-btn acct-hidden-link wf-action" data-action="show-hidden-accounts">Hidden…</button>';
 
   document.getElementById('finance-bills').innerHTML = bills
     .map(
@@ -1115,15 +1178,40 @@ function renderFinances(data) {
   }
 
   document.getElementById('finance-transactions').innerHTML = transactions
-    .map(
-      (t) => `
+    .map((t) => {
+      const opts = categories.map((c) => `<option value="${esc(c)}"${c === t.category ? ' selected' : ''}>${esc(c)}</option>`).join('');
+      const showRaw = t.display_name && t.display_name !== t.description;
+      return `
     <tr>
       <td>${fmt.date(t.date)}</td>
-      <td>${esc(t.description)}</td>
-      <td>${esc(t.category)}</td>
+      <td>${esc(t.display_name || t.description)}${showRaw ? `<br><span class="txn-raw">${esc(t.description)}</span>` : ''}</td>
+      <td><select class="txn-cat" data-txn-id="${t.id}" aria-label="Category">${opts}</select></td>
       <td>${esc(t.account)}</td>
       <td class="amount-cell ${t.amount >= 0 ? 'positive' : 'negative'}">${fmt.gbp(t.amount)}</td>
-    </tr>`
+    </tr>`;
+    })
+    .join('');
+
+  renderCategoryBreakdown(category_breakdown);
+}
+
+function renderCategoryBreakdown(items) {
+  const card = document.getElementById('category-breakdown-card');
+  const el = document.getElementById('category-breakdown');
+  if (!card || !el) return;
+  if (!items || !items.length) {
+    card.style.display = 'none';
+    return;
+  }
+  card.style.display = '';
+  const max = Math.max(...items.map((i) => i.spent), 1);
+  el.innerHTML = items
+    .map(
+      (i) => `
+      <div class="budget-row" style="margin-bottom:10px">
+        <div class="budget-row-head"><span>${esc(i.category)}</span><span>${fmt.gbp(i.spent)} · ${i.count}</span></div>
+        <div class="progress-bar budget"><div class="progress-fill" style="width:${Math.round((i.spent / max) * 100)}%"></div></div>
+      </div>`
     )
     .join('');
 }
@@ -1884,6 +1972,46 @@ function initActions() {
         .catch((err) => showToast(err.message, true));
       return;
     }
+    if (action === 'categorize') {
+      showToast('Categorising…');
+      api('/finances/categorize', { method: 'POST' })
+        .then((r) => { showToast(`Categorised ${r.updated} transactions`); load(); })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'categorize-ai') {
+      showToast('Asking AI to categorise…');
+      api('/finances/categorize-ai', { method: 'POST' })
+        .then((r) => { showToast(r.suggested ? `AI labelled ${r.suggested} merchant(s) · ${r.reclassified} txns` : 'Nothing left to categorise'); load(); })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'rename-account') {
+      openRenameAccountModal(btn.dataset.accountId, btn.dataset.accountName || '');
+      return;
+    }
+    if (action === 'hide-account') {
+      const aid = btn.dataset.accountId;
+      if (aid && confirm('Hide this account from the finances view?')) {
+        api(`/accounts/${aid}`, { method: 'PATCH', body: JSON.stringify({ hidden: true }) })
+          .then(() => { showToast('Account hidden'); load(); })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'show-hidden-accounts') {
+      openHiddenAccountsModal();
+      return;
+    }
+    if (action === 'unhide-account') {
+      const aid = btn.dataset.accountId;
+      if (aid) {
+        api(`/accounts/${aid}`, { method: 'PATCH', body: JSON.stringify({ hidden: false }) })
+          .then(() => { showToast('Account restored'); closeModal(); load(); })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
     if (action === 'disconnect-bank') {
       const cid = btn.dataset.connectionId;
       if (cid && confirm('Disconnect this bank? Linked balances stay but stop updating.')) {
@@ -2073,6 +2201,21 @@ function initActions() {
       const cat = document.querySelector('#appt-categories .cat-btn.active')?.dataset.apptCat || 'all';
       renderAppointments(store.appointments, radio.value, cat);
     });
+  });
+
+  // Recategorise a transaction (and learn the merchant) when its dropdown changes
+  document.addEventListener('change', (e) => {
+    const sel = e.target.closest('.txn-cat');
+    if (!sel || !sel.dataset.txnId) return;
+    api(`/transactions/${sel.dataset.txnId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ category: sel.value, learn: true }),
+    })
+      .then((r) => {
+        showToast(r.reclassified > 1 ? `Learned — ${r.reclassified} matching txns updated` : 'Category updated');
+        load();
+      })
+      .catch((err) => showToast(err.message, true));
   });
 
   document.getElementById('notif-btn').onclick = () => {

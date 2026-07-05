@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
   <link rel="manifest" href="/static/manifest.json">
   <meta name="theme-color" content="#0f1d32">
-  <link rel="stylesheet" href="/static/style.css?v=18">
+  <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
   <header class="site-header">
@@ -235,6 +235,11 @@
         <div id="bank-connections" class="card" style="margin-bottom:16px;display:none"></div>
         <div id="accounts-row" class="accounts-row"></div>
 
+        <div class="card" id="category-breakdown-card" style="margin:16px 0;display:none">
+          <div class="card-header"><h3>Spending by category</h3><p>This month · excludes transfers, savings &amp; crypto</p></div>
+          <div id="category-breakdown"></div>
+        </div>
+
         <div class="card-toolbar">
           <div class="toolbar-actions">
             <button class="btn btn-primary wf-action" data-action="log-expense" data-modal="log-expense">
@@ -253,6 +258,8 @@
             <button class="btn btn-secondary wf-action" data-action="scan-receipt">Scan receipt</button>
             <button class="btn btn-primary wf-action" data-action="connect-bank" id="connect-bank-btn">Connect bank</button>
             <button class="btn btn-secondary wf-action" data-action="sync-banks">Sync all banks</button>
+            <button class="btn btn-soft wf-action" data-action="categorize">Auto-categorise</button>
+            <button class="btn btn-ai wf-action" data-action="categorize-ai">✨ AI categorise</button>
             <button class="btn btn-soft wf-action" data-tab-link="subscriptions">Subscriptions</button>
           </div>
         </div>
@@ -612,6 +619,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=18"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 </html>

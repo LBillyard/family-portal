@@ -16,13 +16,15 @@ from server.services import csv_import, dashboard as dash, documents as doc_file
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
-from server.services import search as search_svc, trips as trips_svc
+from server.services import search as search_svc, trips as trips_svc, categorize as cz
 from shared.schemas import (
+    AccountUpdate,
     AppointmentCreate,
     AppointmentUpdate,
     AssistantChatRequest,
     BillCreate,
     ChangePasswordRequest,
+    TransactionCategoryUpdate,
     DocumentCreate,
     EventCreate,
     HolidayIdeaRequest,
@@ -326,7 +328,63 @@ def api_finances(_: dict = Depends(require_user)):
         "connections": db.list_bank_connections(),
         "banking_configured": open_banking.is_configured(),
         "merged_recurring": finance_merge.build_merged_recurring(),
+        "category_breakdown": db.category_breakdown(),
+        "categories": cz.CATEGORIES,
     }
+
+
+@router.get("/accounts")
+def api_accounts(include_hidden: bool = False, _: dict = Depends(require_user)):
+    return {"accounts": db.list_accounts(include_hidden=include_hidden)}
+
+
+@router.patch("/accounts/{account_id}")
+def update_account(account_id: str, body: AccountUpdate, user: dict = Depends(require_user)):
+    data = body.model_dump(exclude_unset=True)
+    acct = None
+    if data.get("name") is not None:
+        acct = db.rename_account(account_id, data["name"])
+    if data.get("hidden") is not None:
+        acct = db.set_account_hidden(account_id, data["hidden"])
+    if acct is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    activity_svc.log(user, "updated", "account", f"Account updated: {acct['name']}", entity_id=account_id)
+    return acct
+
+
+@router.patch("/transactions/{txn_id}")
+def recategorize_transaction(txn_id: str, body: TransactionCategoryUpdate, _: dict = Depends(require_user)):
+    txn = db.get_transaction(txn_id)
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if body.learn and txn.get("merchant_key"):
+        n = db.learn_and_reclassify(txn["merchant_key"], body.category, source="user")
+        return {"ok": True, "category": body.category, "reclassified": n}
+    db.set_transaction_category(txn_id, body.category)
+    return {"ok": True, "category": body.category, "reclassified": 1}
+
+
+@router.post("/finances/categorize")
+def categorize_all(_: dict = Depends(require_user)):
+    return db.apply_categorization()
+
+
+@router.post("/finances/categorize-ai")
+async def categorize_ai(_: dict = Depends(require_user)):
+    if not openrouter.is_configured():
+        raise HTTPException(status_code=503, detail="OpenRouter not configured — set OPENROUTER_API_KEY")
+    merchants = db.get_uncategorized_merchants(60)
+    if not merchants:
+        return {"suggested": 0, "reclassified": 0}
+    try:
+        suggestions = await cz.ai_suggest(merchants)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI categorisation failed: {exc}") from exc
+    reclassified = 0
+    for desc, info in suggestions.items():
+        key = cz.normalize_merchant(desc)
+        reclassified += db.learn_and_reclassify(key, info["category"], info.get("display_name"), source="ai")
+    return {"suggested": len(suggestions), "reclassified": reclassified}
 
 
 @router.post("/bills")

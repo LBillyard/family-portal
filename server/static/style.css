@@ -4110,3 +4110,45 @@ dialog select:focus {
     flex-direction: column;
   }
 }
+
+/* Smart finances: account rename/hide + editable transaction categories */
+.account-tile-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.acct-btn {
+  font-size: 0.72rem;
+  padding: 3px 9px;
+  border: 1px solid rgba(15, 29, 50, 0.15);
+  background: #fff;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--text-muted, #64748b);
+  transition: background 0.15s;
+}
+.acct-btn:hover {
+  background: #eef2f7;
+}
+.acct-hidden-link {
+  align-self: center;
+  border: none;
+  background: transparent;
+  text-decoration: underline;
+  padding: 4px 6px;
+}
+.txn-cat {
+  font-size: 0.8125rem;
+  padding: 4px 8px;
+  border: 1px solid rgba(15, 29, 50, 0.15);
+  border-radius: 7px;
+  background: #fff;
+  max-width: 160px;
+  cursor: pointer;
+}
+.txn-raw {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted, #94a3b8);
+  margin-top: 2px;
+}
