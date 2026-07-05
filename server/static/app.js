@@ -1676,7 +1676,7 @@ function renderSettings(data) {
     </div>
     <div class="settings-section">
       <h3>WhatsApp assistant</h3>
-      <p>Morning digest at 7am + two-way chat with the AI — ${integrations.whatsapp ? 'configured' : 'add WHATSAPP_* to .env (see setup)'}.</p>
+      <p>Morning digest at 7am + two-way chat with the AI — ${integrations.whatsapp ? 'configured' : 'connect Twilio to enable'}.</p>
       ${users
         .map(
           (u) => `

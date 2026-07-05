@@ -37,7 +37,7 @@ async def run() -> int:
             continue
         line = briefing_svc.whatsapp_digest_line(full)
         try:
-            await whatsapp.send_template(phone, line)
+            await whatsapp.send_digest(phone, line)
             sent += 1
             logger.info("Digest sent to %s (%s)", u["name"], phone)
         except Exception as exc:

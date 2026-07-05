@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import secrets
 import time
 
@@ -17,7 +18,8 @@ from server.services import csv_import, dashboard as dash, documents as doc_file
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
-from server.services import search as search_svc, trips as trips_svc, categorize as cz, whatsapp as whatsapp_svc
+from server.services import search as search_svc, trips as trips_svc, categorize as cz
+from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
@@ -181,17 +183,26 @@ def calendar_sync(_: dict = Depends(require_user)):
     return {"synced": results, "google_last": db.get_setting("google_last_sync", "just now")}
 
 
-# --- WhatsApp (Meta Cloud API) ---
+# --- WhatsApp (provider dispatcher: Twilio or Meta) ---
 
-# In-memory de-dupe of processed inbound message ids (Meta may re-deliver).
+# In-memory de-dupe of processed inbound message ids (providers may re-deliver).
 _whatsapp_seen: set[str] = set()
+
+
+def _dedup(mid: str | None) -> bool:
+    """True if this message id was already handled."""
+    if mid and mid in _whatsapp_seen:
+        return True
+    if mid:
+        _whatsapp_seen.add(mid)
+    return False
 
 
 @router.get("/whatsapp/webhook")
 def whatsapp_verify(request: Request):
     """Meta webhook verification handshake (public, no auth)."""
     params = request.query_params
-    challenge = whatsapp_svc.verify_webhook(
+    challenge = whatsapp_meta.verify_webhook(
         params.get("hub.mode", ""),
         params.get("hub.verify_token", ""),
         params.get("hub.challenge", ""),
@@ -205,20 +216,31 @@ def whatsapp_verify(request: Request):
 async def whatsapp_receive(request: Request):
     """Inbound messages from Meta (public, verified by signature + number allowlist)."""
     raw = await request.body()
-    if not whatsapp_svc.verify_signature(raw, request.headers.get("X-Hub-Signature-256")):
+    if not whatsapp_meta.verify_signature(raw, request.headers.get("X-Hub-Signature-256")):
         raise HTTPException(status_code=403, detail="Bad signature")
     try:
         payload = json.loads(raw.decode("utf-8") or "{}")
     except Exception:
         return {"ok": True}
-    for msg in whatsapp_svc.parse_inbound(payload):
-        mid = msg.get("id")
-        if mid and mid in _whatsapp_seen:
+    for msg in whatsapp_meta.parse_inbound(payload):
+        if _dedup(msg.get("id")):
             continue
-        if mid:
-            _whatsapp_seen.add(mid)
         await _handle_whatsapp_message(msg)
     return {"ok": True}
+
+
+@router.post("/whatsapp/twilio")
+async def whatsapp_twilio_receive(request: Request):
+    """Inbound messages from Twilio (public, form-encoded, X-Twilio-Signature verified)."""
+    form = dict((await request.form()))
+    url = os.environ.get("PUBLIC_URL", "").rstrip("/") + "/api/whatsapp/twilio"
+    if not whatsapp_twilio.validate_request(url, form, request.headers.get("X-Twilio-Signature")):
+        raise HTTPException(status_code=403, detail="Bad signature")
+    for msg in whatsapp_twilio.parse_inbound(form):
+        if _dedup(msg.get("id")):
+            continue
+        await _handle_whatsapp_message(msg)
+    return PlainTextResponse("<Response></Response>", media_type="application/xml")
 
 
 async def _handle_whatsapp_message(msg: dict) -> None:
@@ -262,7 +284,7 @@ async def whatsapp_test_digest(user: dict = Depends(require_user)):
         raise HTTPException(status_code=400, detail="Add your phone number in Settings → Household first")
     line = briefing_svc.whatsapp_digest_line(full)
     try:
-        await whatsapp_svc.send_template(phone, line)
+        await whatsapp_svc.send_digest(phone, line)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     return {"ok": True, "sent_to": phone, "preview": line}
