@@ -13,6 +13,9 @@ from fastapi.responses import FileResponse, RedirectResponse
 from server import auth, database as db
 from server.services import csv_import, dashboard as dash, documents as doc_files, google_calendar, openrouter, open_banking
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
+from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
+from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
+from server.services import search as search_svc, trips as trips_svc
 from shared.schemas import (
     AppointmentCreate,
     AssistantChatRequest,
@@ -21,12 +24,16 @@ from shared.schemas import (
     EventCreate,
     HolidayIdeaRequest,
     LoginRequest,
+    MaintenanceCreate,
+    MaintenanceUpdate,
     MediaUpdate,
+    SearchQuery,
     SubscriptionUpdate,
     TaskCreate,
     TaskUpdate,
     TransactionCreate,
     TripCreate,
+    TripPackingRequest,
 )
 
 router = APIRouter(prefix="/api")
@@ -247,7 +254,8 @@ def api_calendar(_: dict = Depends(require_user)):
 def create_event(body: EventCreate, user: dict = Depends(require_user)):
     end = body.end or body.start
     all_day = body.all_day or (len(body.start) == 10)
-    return db.create_event(
+    uid = body.user_id or user["id"]
+    event = db.create_event(
         {
             "title": body.title,
             "start": body.start,
@@ -258,6 +266,13 @@ def create_event(body: EventCreate, user: dict = Depends(require_user)):
         },
         user["id"],
     )
+    if google_calendar.is_configured():
+        try:
+            google_calendar.push_event_to_google(uid, event)
+        except Exception as exc:
+            logger.warning("Google write-back failed: %s", exc)
+    activity_svc.log(user, "created", "event", f"Added event: {body.title}", entity_id=event["id"])
+    return event
 
 
 # --- Finances ---
@@ -273,6 +288,7 @@ def api_finances(_: dict = Depends(require_user)):
         "summary": db.finance_summary(),
         "connections": db.list_bank_connections(),
         "banking_configured": open_banking.is_configured(),
+        "merged_recurring": finance_merge.build_merged_recurring(),
     }
 
 
@@ -431,6 +447,155 @@ async def assistant_chat(body: AssistantChatRequest, user: dict = Depends(requir
 def assistant_clear(user: dict = Depends(require_user)):
     ai_assistant.clear_history(user["id"])
     return {"ok": True}
+
+
+@router.post("/assistant/confirm/{action_id}")
+async def assistant_confirm(action_id: str, user: dict = Depends(require_user)):
+    result = await ai_assistant.confirm_action(action_id, user)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Not found"))
+    activity_svc.log(user, "confirmed", "assistant", result.get("summary", "Confirmed AI action"))
+    return result
+
+
+# --- Briefing, search, activity, renewals, maintenance ---
+
+@router.get("/briefing")
+def api_briefing(user: dict = Depends(require_user)):
+    return briefing_svc.build_briefing(user)
+
+
+@router.get("/search")
+def api_search(q: str = "", _: dict = Depends(require_user)):
+    return search_svc.search(q)
+
+
+@router.post("/search")
+def api_search_post(body: SearchQuery, _: dict = Depends(require_user)):
+    return search_svc.search(body.query)
+
+
+@router.get("/activity")
+def api_activity(limit: int = 50, _: dict = Depends(require_user)):
+    return {"items": db.list_activity(limit=limit)}
+
+
+@router.get("/renewals")
+def api_renewals(days: int = 90, _: dict = Depends(require_user)):
+    return renewals_svc.build_renewal_calendar(days_ahead=days)
+
+
+@router.get("/maintenance")
+def api_maintenance(_: dict = Depends(require_user)):
+    return {"items": db.list_maintenance()}
+
+
+@router.post("/maintenance")
+def create_maintenance(body: MaintenanceCreate, user: dict = Depends(require_user)):
+    item = db.create_maintenance({**body.model_dump(), "user_id": user["id"]})
+    activity_svc.log(user, "created", "maintenance", f"Added maintenance: {body.title}", entity_id=item["id"])
+    return item
+
+
+@router.patch("/maintenance/{item_id}")
+def patch_maintenance(item_id: str, body: MaintenanceUpdate, user: dict = Depends(require_user)):
+    item = db.update_maintenance(item_id, body.model_dump(exclude_unset=True))
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    activity_svc.log(user, "updated", "maintenance", f"Updated maintenance: {item['title']}", entity_id=item_id)
+    return item
+
+
+@router.post("/maintenance/{item_id}/done")
+def maintenance_done(item_id: str, user: dict = Depends(require_user)):
+    item = db.mark_maintenance_done(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    activity_svc.log(user, "completed", "maintenance", f"Serviced: {item['title']}", entity_id=item_id)
+    return item
+
+
+@router.delete("/maintenance/{item_id}")
+def delete_maintenance(item_id: str, user: dict = Depends(require_user)):
+    item = db.get_maintenance(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    db.delete_maintenance(item_id)
+    activity_svc.log(user, "deleted", "maintenance", f"Removed maintenance: {item['title']}", entity_id=item_id)
+    return {"ok": True}
+
+
+@router.get("/finances/merged")
+def api_merged_finances(_: dict = Depends(require_user)):
+    return finance_merge.build_merged_recurring()
+
+
+@router.get("/holidays/trips/{trip_id}")
+def api_trip_detail(trip_id: str, _: dict = Depends(require_user)):
+    trip = trips_svc.get_trip_detail(trip_id)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return trip
+
+
+@router.post("/holidays/trips/{trip_id}/packing")
+def add_trip_packing(trip_id: str, body: TripPackingRequest, user: dict = Depends(require_user)):
+    if not db.get_trip_detail(trip_id):
+        raise HTTPException(status_code=404, detail="Trip not found")
+    packing = trips_svc.add_packing_list(trip_id, body.template)
+    activity_svc.log(user, "updated", "trip", f"Added packing list to trip", entity_id=trip_id)
+    return {"packing": packing}
+
+
+@router.post("/holidays/trips/{trip_id}/documents/{doc_id}")
+def link_trip_doc(trip_id: str, doc_id: str, user: dict = Depends(require_user)):
+    if not db.get_document(doc_id):
+        raise HTTPException(status_code=404, detail="Document not found")
+    db.link_trip_document(trip_id, doc_id)
+    activity_svc.log(user, "linked", "trip", f"Linked document to trip", entity_id=trip_id, meta={"document_id": doc_id})
+    return {"ok": True}
+
+
+@router.delete("/holidays/trips/{trip_id}/documents/{doc_id}")
+def unlink_trip_doc(trip_id: str, doc_id: str, user: dict = Depends(require_user)):
+    db.unlink_trip_document(trip_id, doc_id)
+    return {"ok": True}
+
+
+@router.post("/finances/scan-receipt")
+async def scan_receipt(
+    file: UploadFile = File(...),
+    account: str = Form("joint"),
+    user: dict = Depends(require_user),
+):
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large (max 10 MB)")
+    mime = file.content_type or "image/jpeg"
+    try:
+        result = await receipt_svc.scan_and_log_transaction(content, mime, user, account)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Receipt scan failed: {exc}") from exc
+    activity_svc.log(
+        user,
+        "created",
+        "transaction",
+        f"Receipt scan: {result['transaction']['description']}",
+        entity_id=result["transaction"]["id"],
+    )
+    return result
+
+
+@router.post("/notifications/send-reminders")
+def send_reminders(_: dict = Depends(require_user)):
+    return notify_svc.send_renewal_reminders()
+
+
+@router.get("/notifications/log")
+def notification_log(_: dict = Depends(require_user)):
+    return {"items": db.list_notification_log()}
 
 
 # --- Tasks & documents ---
@@ -639,6 +804,9 @@ def api_settings(_: dict = Depends(require_user)):
             "google_calendar": google_calendar.is_configured(),
             "openrouter": openrouter.is_configured(),
             "open_banking": open_banking.is_configured(),
+            "email": notify_svc.is_configured(),
+            "google_writeback": google_calendar.is_configured(),
+            "receipt_scan": openrouter.is_configured(),
         },
-        "notifications": [],
+        "notification_log": db.list_notification_log(10),
     }

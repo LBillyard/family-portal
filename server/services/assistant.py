@@ -12,12 +12,17 @@ import httpx
 
 from server import database as db
 from server.services import openrouter
+from server.services import activity as activity_log
+from server.services import briefing as briefing_svc
+from server.services import search as search_svc
+from server.services import trips as trips_svc
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_HISTORY = 24
 MAX_TOOL_ROUNDS = 8
+CONFIRM_TOOLS = {"log_transaction", "add_bill"}
 
 SYSTEM_PROMPT = """You are the Family Portal assistant for a UK household (two adults: Luke and Partner).
 You can read household data and take actions using tools — calendar, tasks, appointments, holidays, bills, and transactions.
@@ -195,6 +200,59 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_morning_briefing",
+            "description": "Daily briefing: today's events, appointments, tasks, renewals, next trip.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_household",
+            "description": "Search events, bills, transactions, tasks, trips, documents, maintenance.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_maintenance_item",
+            "description": "Log home maintenance (boiler, gutters, appliances).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "category": {"type": "string"},
+                    "next_due_date": {"type": "string"},
+                    "interval_months": {"type": "integer"},
+                    "vendor": {"type": "string"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_trip_packing_list",
+            "description": "Add packing list template to a holiday trip.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trip_title": {"type": "string"},
+                    "template": {"type": "string", "enum": ["default", "beach", "city", "weekend"]},
+                },
+                "required": ["trip_title"],
+            },
+        },
+    },
 ]
 
 
@@ -254,8 +312,24 @@ def build_context(user: dict) -> str:
     )
 
 
-async def execute_tool(name: str, args: dict, user: dict) -> dict:
+async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = False) -> dict:
     uid = user["id"]
+    if name in CONFIRM_TOOLS and not confirmed:
+        summary = _confirm_summary(name, args)
+        pending = db.create_pending_action(
+            {
+                "user_id": uid,
+                "tool_name": name,
+                "args_json": json.dumps(args),
+                "summary": summary,
+            }
+        )
+        return {
+            "ok": False,
+            "needs_confirmation": True,
+            "pending_id": pending["id"],
+            "summary": summary,
+        }
     try:
         if name == "get_household_summary":
             return {
@@ -288,6 +362,14 @@ async def execute_tool(name: str, args: dict, user: dict) -> dict:
                 },
                 uid,
             )
+            try:
+                from server.services import google_calendar
+
+                if google_calendar.is_configured():
+                    google_calendar.push_event_to_google(owner, {**event, "all_day": bool(args.get("all_day") or "T" not in start)})
+            except Exception:
+                pass
+            activity_log.log(user, "created", "event", f"Added event: {args['title']}", entity_id=event["id"])
             return {"ok": True, "event": event}
         if name == "create_task":
             task = db.create_task(
@@ -347,6 +429,7 @@ async def execute_tool(name: str, args: dict, user: dict) -> dict:
                     "category": args.get("category", "Other"),
                 }
             )
+            activity_log.log(user, "created", "bill", f"Added bill: {args['name']}", entity_id=bill["id"])
             return {"ok": True, "bill": bill}
         if name == "log_transaction":
             amount = float(args["amount"])
@@ -365,16 +448,59 @@ async def execute_tool(name: str, args: dict, user: dict) -> dict:
                     "account_id": "starling",
                 }
             )
+            activity_log.log(user, "created", "transaction", f"Logged: {args['description']} £{amount:.2f}", entity_id=txn["id"])
             return {"ok": True, "transaction": txn}
         if name == "list_tasks":
             tasks = db.list_tasks()
             if args.get("open_only", True):
                 tasks = [t for t in tasks if not t.get("done")]
             return {"tasks": tasks}
+        if name == "get_morning_briefing":
+            return briefing_svc.build_briefing(user)
+        if name == "search_household":
+            return search_svc.search(args.get("query", ""))
+        if name == "create_maintenance_item":
+            item = db.create_maintenance(
+                {
+                    "title": args["title"],
+                    "category": args.get("category", "general"),
+                    "next_due_date": args.get("next_due_date", ""),
+                    "interval_months": args.get("interval_months", 12),
+                    "vendor": args.get("vendor", ""),
+                    "user_id": uid,
+                }
+            )
+            activity_log.log(user, "created", "maintenance", f"Added maintenance: {args['title']}", entity_id=item["id"])
+            return {"ok": True, "maintenance": item}
+        if name == "add_trip_packing_list":
+            trips = db.list_trips()
+            needle = (args.get("trip_title") or "").lower()
+            trip = next((t for t in trips if needle in t["title"].lower()), None)
+            if not trip:
+                return {"ok": False, "error": "Trip not found"}
+            packing = trips_svc.add_packing_list(trip["id"], args.get("template", "default"))
+            return {"ok": True, "trip_id": trip["id"], "packing": packing}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)
         return {"ok": False, "error": str(exc)}
+
+
+def _confirm_summary(tool_name: str, args: dict) -> str:
+    if tool_name == "log_transaction":
+        return f"Log transaction: {args.get('description')} — £{float(args.get('amount', 0)):.2f} ({args.get('category', 'Other')})"
+    if tool_name == "add_bill":
+        return f"Add bill: {args.get('name')} — £{float(args.get('amount', 0)):.2f} due day {args.get('due_day')}"
+    return f"Confirm {tool_name}"
+
+
+async def confirm_action(action_id: str, user: dict) -> dict:
+    pending = db.get_pending_action(action_id)
+    if not pending or pending["user_id"] != user["id"]:
+        return {"ok": False, "error": "Confirmation expired or not found"}
+    db.delete_pending_action(action_id)
+    result = await execute_tool(pending["tool_name"], pending["args"], user, confirmed=True)
+    return {"ok": True, "result": result, "summary": pending["summary"]}
 
 
 async def _call_openrouter(messages: list[dict]) -> dict:
@@ -439,6 +565,16 @@ async def chat(user: dict, message: str) -> dict:
                     tool_args = {}
                 result = await execute_tool(tool_name, tool_args, user)
                 actions.append({"tool": tool_name, "args": tool_args, "result": result})
+                if result.get("needs_confirmation"):
+                    reply = f"I need your confirmation: {result['summary']}. Open the assistant or use Confirm in the app."
+                    history.append({"role": "assistant", "content": reply})
+                    save_history(user["id"], history)
+                    return {
+                        "reply": reply,
+                        "actions": actions,
+                        "data_changed": False,
+                        "pending_confirmation": result,
+                    }
                 if result.get("ok"):
                     data_changed = True
                 messages.append(

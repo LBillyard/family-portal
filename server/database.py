@@ -323,6 +323,107 @@ def _migrate(conn: sqlite3.Connection) -> None:
                     (_new_id(), acct, desc, cat, amt, pay, now),
                 )
 
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS maintenance_items (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'general',
+            last_service_date TEXT,
+            next_due_date TEXT,
+            interval_months INTEGER NOT NULL DEFAULT 12,
+            vendor TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            warranty_expiry TEXT,
+            user_id TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS activity_log (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT '',
+            user_name TEXT NOT NULL DEFAULT '',
+            action TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL,
+            meta_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS trip_documents (
+            trip_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            PRIMARY KEY (trip_id, document_id),
+            FOREIGN KEY (trip_id) REFERENCES holiday_trips(id) ON DELETE CASCADE,
+            FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS pending_actions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            args_json TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS receipts (
+            id TEXT PRIMARY KEY,
+            transaction_id TEXT,
+            user_id TEXT,
+            merchant TEXT NOT NULL DEFAULT '',
+            extracted_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS notification_log (
+            id TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            status TEXT NOT NULL,
+            detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )"""
+    )
+
+    hcols = {r[1] for r in conn.execute("PRAGMA table_info(holiday_checklist)").fetchall()}
+    if "item_type" not in hcols:
+        conn.execute("ALTER TABLE holiday_checklist ADD COLUMN item_type TEXT NOT NULL DEFAULT 'checklist'")
+
+    bcols = {r[1] for r in conn.execute("PRAGMA table_info(bills)").fetchall()}
+    if "subscription_id" not in bcols:
+        conn.execute("ALTER TABLE bills ADD COLUMN subscription_id TEXT")
+
+    ecols = {r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()}
+    if "google_event_id_written" not in ecols:
+        conn.execute("ALTER TABLE events ADD COLUMN google_event_id_written TEXT")
+
+    maint_count = conn.execute("SELECT COUNT(*) AS c FROM maintenance_items").fetchone()["c"]
+    if maint_count == 0:
+        now = _utcnow()
+        seed_maint = [
+            ("Boiler service", "heating", "2025-09-01", "2026-09-01", 12, "British Gas", "Annual service"),
+            ("Gutter clearing", "exterior", "2025-11-01", "2026-11-01", 12, "Local roofer", ""),
+            ("Washing machine warranty", "appliance", "", "2027-03-01", 0, "Currys", "Extended warranty"),
+        ]
+        for title, cat, last_d, next_d, interval, vendor, notes in seed_maint:
+            conn.execute(
+                """INSERT INTO maintenance_items
+                   (id, title, category, last_service_date, next_due_date, interval_months, vendor, notes, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (_new_id(), title, cat, last_d, next_d, interval, vendor, notes, now),
+            )
+
 
 def _seed(conn: sqlite3.Connection) -> None:
     from server.auth import hash_password
@@ -593,6 +694,7 @@ def _bill_out(r: dict) -> dict:
         "recurrence": r["recurrence"],
         "category": r["category"],
         "paid": bool(r["paid"]),
+        "subscription_id": r.get("subscription_id"),
     }
 
 
@@ -805,9 +907,23 @@ def list_trips() -> list[dict]:
         for r in rows:
             d = row_to_dict(r)
             checklist = conn.execute(
-                "SELECT label, done FROM holiday_checklist WHERE trip_id = ? ORDER BY sort_order",
+                "SELECT label, done, item_type FROM holiday_checklist WHERE trip_id = ? ORDER BY sort_order",
                 (d["id"],),
             ).fetchall()
+            checklist_items = []
+            packing_items = []
+            for c in checklist:
+                item = {"label": c["label"], "done": bool(c["done"])}
+                if c["item_type"] == "packing":
+                    packing_items.append(item)
+                else:
+                    checklist_items.append(item)
+            media_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM media_items WHERE trip_id = ?", (d["id"],)
+            ).fetchone()["c"]
+            doc_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM trip_documents WHERE trip_id = ?", (d["id"],)
+            ).fetchone()["c"]
             days_until = None
             if d.get("start_date") and d["status"] == "booked":
                 try:
@@ -824,7 +940,10 @@ def list_trips() -> list[dict]:
                 "budget": d["budget"],
                 "spent": d["spent"],
                 "days_until": days_until,
-                "checklist": [{"label": c["label"], "done": bool(c["done"])} for c in checklist],
+                "checklist": checklist_items,
+                "packing": packing_items,
+                "media_count": media_count,
+                "doc_count": doc_count,
                 "bookings": [],
             })
         return trips
@@ -1420,3 +1539,310 @@ def _subscription_out(r: dict) -> dict:
         "notes": r.get("notes", ""),
         "updated_at": r.get("updated_at"),
     }
+
+
+# --- Maintenance ---
+
+def list_maintenance() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM maintenance_items ORDER BY next_due_date, title").fetchall()
+        return [_maintenance_out(row_to_dict(r)) for r in rows]
+
+
+def create_maintenance(data: dict) -> dict:
+    mid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO maintenance_items
+               (id, title, category, last_service_date, next_due_date, interval_months, vendor, notes, warranty_expiry, user_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                mid,
+                data["title"],
+                data.get("category", "general"),
+                data.get("last_service_date", ""),
+                data.get("next_due_date", ""),
+                int(data.get("interval_months") or 12),
+                data.get("vendor", ""),
+                data.get("notes", ""),
+                data.get("warranty_expiry", ""),
+                data.get("user_id"),
+                now,
+            ),
+        )
+    return get_maintenance(mid)  # type: ignore[return-value]
+
+
+def get_maintenance(item_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM maintenance_items WHERE id = ?", (item_id,)).fetchone()
+        return _maintenance_out(row_to_dict(row)) if row else None
+
+
+def update_maintenance(item_id: str, data: dict) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT id FROM maintenance_items WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            return None
+        fields = []
+        values = []
+        for key in ("title", "category", "last_service_date", "next_due_date", "vendor", "notes", "warranty_expiry"):
+            if key in data:
+                fields.append(f"{key} = ?")
+                values.append(data[key])
+        if "interval_months" in data:
+            fields.append("interval_months = ?")
+            values.append(int(data["interval_months"]))
+        if fields:
+            values.append(item_id)
+            conn.execute(f"UPDATE maintenance_items SET {', '.join(fields)} WHERE id = ?", values)
+    return get_maintenance(item_id)
+
+
+def mark_maintenance_done(item_id: str, service_date: str | None = None) -> Optional[dict]:
+    item = get_maintenance(item_id)
+    if not item:
+        return None
+    svc = service_date or date.today().isoformat()
+    next_due = ""
+    months = int(item.get("interval_months") or 0)
+    if months > 0:
+        d = date.fromisoformat(svc[:10])
+        month_idx = d.month - 1 + months
+        year = d.year + month_idx // 12
+        month = month_idx % 12 + 1
+        next_due = date(year, month, min(d.day, 28)).isoformat()
+    return update_maintenance(item_id, {"last_service_date": svc, "next_due_date": next_due})
+
+
+def delete_maintenance(item_id: str) -> bool:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM maintenance_items WHERE id = ?", (item_id,))
+        return True
+
+
+def _maintenance_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "title": r["title"],
+        "category": r["category"],
+        "last_service_date": r.get("last_service_date") or "",
+        "next_due_date": r.get("next_due_date") or "",
+        "interval_months": r.get("interval_months", 12),
+        "vendor": r.get("vendor", ""),
+        "notes": r.get("notes", ""),
+        "warranty_expiry": r.get("warranty_expiry") or "",
+        "user_id": r.get("user_id"),
+    }
+
+
+# --- Activity feed ---
+
+def create_activity(data: dict) -> dict:
+    aid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO activity_log (id, user_id, user_name, action, entity_type, entity_id, summary, meta_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                aid,
+                data.get("user_id", ""),
+                data.get("user_name", ""),
+                data["action"],
+                data["entity_type"],
+                data.get("entity_id", ""),
+                data["summary"],
+                data.get("meta_json", "{}"),
+                now,
+            ),
+        )
+    return {"id": aid, "summary": data["summary"], "created_at": now}
+
+
+def list_activity(limit: int = 50) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM activity_log ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [_activity_out(row_to_dict(r)) for r in rows]
+
+
+def _activity_out(r: dict) -> dict:
+    meta = {}
+    try:
+        meta = json.loads(r.get("meta_json") or "{}")
+    except json.JSONDecodeError:
+        pass
+    return {
+        "id": r["id"],
+        "user_id": r.get("user_id"),
+        "user_name": r.get("user_name"),
+        "action": r["action"],
+        "entity_type": r["entity_type"],
+        "entity_id": r.get("entity_id"),
+        "summary": r["summary"],
+        "meta": meta,
+        "created_at": r["created_at"],
+    }
+
+
+# --- Trip documents & packing ---
+
+def link_trip_document(trip_id: str, document_id: str) -> bool:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO trip_documents (trip_id, document_id) VALUES (?, ?)",
+            (trip_id, document_id),
+        )
+        return True
+
+
+def unlink_trip_document(trip_id: str, document_id: str) -> bool:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM trip_documents WHERE trip_id = ? AND document_id = ?", (trip_id, document_id))
+        return True
+
+
+def list_trip_documents(trip_id: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT d.* FROM documents d
+               INNER JOIN trip_documents td ON td.document_id = d.id
+               WHERE td.trip_id = ? ORDER BY d.name""",
+            (trip_id,),
+        ).fetchall()
+        return [_document_out(row_to_dict(r)) for r in rows]
+
+
+def add_packing_items(trip_id: str, labels: list[str]) -> list[dict]:
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT COUNT(*) AS c FROM holiday_checklist WHERE trip_id = ? AND item_type = 'packing'",
+            (trip_id,),
+        ).fetchone()["c"]
+        start_order = existing
+        for i, label in enumerate(labels):
+            conn.execute(
+                """INSERT INTO holiday_checklist (id, trip_id, label, done, sort_order, item_type)
+                   VALUES (?, ?, ?, 0, ?, 'packing')""",
+                (_new_id(), trip_id, label, start_order + i),
+            )
+    trip = get_trip_detail(trip_id)
+    return trip.get("packing", []) if trip else []
+
+
+def toggle_checklist_item(trip_id: str, label: str, item_type: str = "checklist") -> bool:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, done FROM holiday_checklist WHERE trip_id = ? AND label = ? AND item_type = ?",
+            (trip_id, label, item_type),
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute(
+            "UPDATE holiday_checklist SET done = ? WHERE id = ?",
+            (0 if row["done"] else 1, row["id"]),
+        )
+        return True
+
+
+def get_trip_detail(trip_id: str) -> Optional[dict]:
+    trips = list_trips()
+    trip = next((t for t in trips if t["id"] == trip_id), None)
+    if not trip:
+        return None
+    trip["linked_documents"] = list_trip_documents(trip_id)
+    return trip
+
+
+# --- Pending AI actions ---
+
+def create_pending_action(data: dict) -> dict:
+    pid = _new_id()
+    now = _utcnow()
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO pending_actions (id, user_id, tool_name, args_json, summary, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (pid, data["user_id"], data["tool_name"], data["args_json"], data["summary"], now, expires),
+        )
+    return get_pending_action(pid)  # type: ignore[return-value]
+
+
+def get_pending_action(action_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM pending_actions WHERE id = ?", (action_id,)).fetchone()
+        if not row:
+            return None
+        d = row_to_dict(row)
+        return {
+            "id": d["id"],
+            "user_id": d["user_id"],
+            "tool_name": d["tool_name"],
+            "args": json.loads(d["args_json"]),
+            "summary": d["summary"],
+            "created_at": d["created_at"],
+            "expires_at": d["expires_at"],
+        }
+
+
+def delete_pending_action(action_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM pending_actions WHERE id = ?", (action_id,))
+
+
+def list_pending_actions(user_id: str) -> list[dict]:
+    now = _utcnow()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM pending_actions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC",
+            (user_id, now),
+        ).fetchall()
+        return [get_pending_action(row_to_dict(r)["id"]) for r in rows]  # type: ignore[misc]
+
+
+# --- Receipts & notifications ---
+
+def create_receipt(data: dict) -> dict:
+    rid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO receipts (id, transaction_id, user_id, merchant, extracted_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (rid, data.get("transaction_id"), data.get("user_id"), data.get("merchant", ""), data.get("extracted_json", "{}"), now),
+        )
+    return {"id": rid, "transaction_id": data.get("transaction_id"), "created_at": now}
+
+
+def create_notification_log(data: dict) -> dict:
+    nid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO notification_log (id, channel, subject, body, status, detail, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (nid, data["channel"], data["subject"], data["body"], data["status"], data.get("detail", ""), now),
+        )
+    return {"id": nid, "status": data["status"], "created_at": now}
+
+
+def list_notification_log(limit: int = 20) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM notification_log ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [row_to_dict(r) for r in rows]
+
+
+def link_bill_subscription(bill_id: str, subscription_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE bills SET subscription_id = ? WHERE id = ?", (subscription_id, bill_id))
+
+
+def set_event_google_written(event_id: str, google_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE events SET google_event_id_written = ?, source = 'portal' WHERE id = ?", (google_id, event_id))

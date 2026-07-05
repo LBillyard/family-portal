@@ -100,3 +100,33 @@ class SubscriptionUpdate(BaseModel):
     notes: Optional[str] = None
     category: Optional[str] = None
 
+
+class MaintenanceCreate(BaseModel):
+    title: str
+    category: str = "general"
+    last_service_date: Optional[str] = ""
+    next_due_date: Optional[str] = ""
+    interval_months: int = 12
+    vendor: Optional[str] = ""
+    notes: Optional[str] = ""
+    warranty_expiry: Optional[str] = ""
+
+
+class MaintenanceUpdate(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+    last_service_date: Optional[str] = None
+    next_due_date: Optional[str] = None
+    interval_months: Optional[int] = None
+    vendor: Optional[str] = None
+    notes: Optional[str] = None
+    warranty_expiry: Optional[str] = None
+
+
+class SearchQuery(BaseModel):
+    query: str
+
+
+class TripPackingRequest(BaseModel):
+    template: Literal["default", "beach", "city", "weekend"] = "default"
+

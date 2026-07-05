@@ -9,7 +9,7 @@ from server import database as db
 
 logger = logging.getLogger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
 def _client_config() -> dict:
@@ -122,3 +122,34 @@ def sync_all_users() -> dict:
                 logger.exception("Google sync failed for %s", user["id"])
                 results[user["id"]] = f"error: {exc}"
     return results
+
+
+def push_event_to_google(user_id: str, event: dict) -> str | None:
+    """Create a portal event on the user's Google Calendar. Returns Google event id."""
+    user = db.get_user(user_id)
+    if not user or not user.get("google_token_json"):
+        return None
+
+    from googleapiclient.discovery import build
+
+    creds = _credentials(user["google_token_json"])
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+    body: dict = {
+        "summary": event["title"],
+        "location": event.get("location") or "",
+    }
+    if event.get("all_day"):
+        start_d = event["start"][:10]
+        end_d = (event.get("end") or event["start"])[:10]
+        body["start"] = {"date": start_d}
+        body["end"] = {"date": end_d}
+    else:
+        body["start"] = {"dateTime": event["start"], "timeZone": "Europe/London"}
+        body["end"] = {"dateTime": event.get("end") or event["start"], "timeZone": "Europe/London"}
+
+    created = service.events().insert(calendarId="primary", body=body).execute()
+    gid = created.get("id")
+    if gid and event.get("id"):
+        db.set_event_google_written(event["id"], gid)
+    return gid

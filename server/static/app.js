@@ -812,6 +812,10 @@ function renderFinances(data) {
     })
     .join('');
 
+  if (data.merged_recurring) {
+    renderMergedRecurring(data.merged_recurring);
+  }
+
   document.getElementById('finance-transactions').innerHTML = transactions
     .map(
       (t) => `
@@ -879,9 +883,12 @@ function renderHolidays(data) {
           <p style="font-size:0.875rem;color:var(--text-muted);margin-top:8px">Budget: ${fmt.gbp(t.spent)} / ${fmt.gbp(t.budget)}</p>
           <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(budgetPct, 100)}%"></div></div>
           ${checklist ? `<ul class="checklist">${checklist}</ul>` : ''}
+          ${(t.packing || []).length ? `<p style="font-size:0.75rem;color:var(--text-muted);margin-top:8px">📦 ${t.packing.filter((p) => !p.done).length} packing items left</p>` : ''}
+          ${t.media_count ? `<p style="font-size:0.75rem;color:var(--text-muted)">📷 ${t.media_count} photos</p>` : ''}
           ${bookings ? `<div class="booking-links">${bookings}</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            <button class="btn btn-sm btn-primary wf-action" data-action="view-trip">Details</button>
+            <button class="btn btn-sm btn-primary wf-action" data-action="view-trip" data-trip-id="${t.id}">Details</button>
+            <button class="btn btn-sm btn-soft wf-action" data-action="add-packing" data-trip-id="${t.id}" data-template="beach">Packing</button>
             <button class="btn btn-sm btn-soft wf-action" data-tab-link="media" data-media-trip="${t.id}">Photos</button>
             <button class="btn btn-sm btn-outline wf-action" data-action="edit-trip">Edit</button>
           </div>
@@ -1081,8 +1088,129 @@ function renderSubscriptions(data) {
     : `<div class="vault-empty"><p>No recurring subscriptions detected yet.</p><p class="hint-small">Connect your bank and tap <strong>Scan transactions</strong>, or import CSV data on the Finances tab.</p></div>`;
 }
 
+function renderBriefing(data) {
+  const el = document.getElementById('briefing-card');
+  if (!el || !data) return;
+  el.innerHTML = `
+    <div class="briefing-inner">
+      <div>
+        <h3>${esc(data.greeting)}, ${esc(data.user_name)}</h3>
+        <p>${esc(data.summary_text)}</p>
+      </div>
+      <div class="briefing-pills">
+        ${data.today_events?.length ? `<span>${data.today_events.length} events today</span>` : ''}
+        ${data.due_tasks?.length ? `<span>${data.due_tasks.length} tasks due</span>` : ''}
+        ${data.urgent_renewals?.length ? `<span>${data.urgent_renewals.length} renewals soon</span>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderActivityFeed(data) {
+  const el = document.getElementById('activity-feed');
+  if (!el) return;
+  const items = data?.items || [];
+  el.innerHTML = items.length
+    ? items.map((a) => `
+      <div class="activity-row">
+        <div class="activity-dot"></div>
+        <div>
+          <div class="activity-summary">${esc(a.summary)}</div>
+          <div class="activity-meta">${esc(a.user_name || 'System')} · ${fmt.datetime(a.created_at)} · ${esc(a.entity_type)}</div>
+        </div>
+      </div>`).join('')
+    : '<p class="hint-small">Activity will appear here as you use the portal.</p>';
+}
+
+function renderRenewals(data) {
+  document.getElementById('renewal-stats').innerHTML = `
+    <div class="stat"><span>${data.overdue_count || 0}</span><label>Overdue</label></div>
+    <div class="stat"><span>${data.this_month_count || 0}</span><label>Next 30 days</label></div>
+    <div class="stat"><span>${data.items?.length || 0}</span><label>Total tracked</label></div>`;
+  document.getElementById('renewal-timeline').innerHTML = (data.items || []).length
+    ? data.items.map((r) => `
+      <div class="renewal-row ${r.days_until < 0 ? 'overdue' : ''}">
+        <div class="renewal-date">${fmt.date(r.date)}<small>${r.days_until === 0 ? 'Today' : r.days_until < 0 ? `${Math.abs(r.days_until)}d overdue` : `in ${r.days_until}d`}</small></div>
+        <div class="renewal-body">
+          <strong>${esc(r.title)}</strong>
+          <span class="renewal-type">${esc(r.type)}</span>
+          ${r.detail ? `<span class="renewal-detail">${esc(String(r.detail))}</span>` : ''}
+        </div>
+      </div>`).join('')
+    : '<div class="vault-empty"><p>No renewals in the next 90 days.</p></div>';
+}
+
+function renderMaintenance(data) {
+  const items = data?.items || [];
+  document.getElementById('maintenance-list').innerHTML = items.length
+    ? items.map((m) => `
+      <div class="maintenance-row">
+        <div>
+          <strong>${esc(m.title)}</strong>
+          <div class="subscription-meta"><span>${esc(m.category)}</span>${m.vendor ? `<span>${esc(m.vendor)}</span>` : ''}${m.next_due_date ? `<span>Due ${fmt.date(m.next_due_date)}</span>` : ''}</div>
+          ${m.notes ? `<p class="hint-small">${esc(m.notes)}</p>` : ''}
+        </div>
+        <div class="subscription-actions">
+          <button class="btn btn-sm btn-primary wf-action" data-action="maintenance-done" data-maint-id="${m.id}">Mark done</button>
+        </div>
+      </div>`).join('')
+    : '<div class="vault-empty"><p>No maintenance items yet.</p></div>';
+}
+
+function renderMergedRecurring(data) {
+  const el = document.getElementById('merged-recurring');
+  if (!el || !data) return;
+  const items = data.items || [];
+  el.innerHTML = items.length
+    ? items.map((x) => `
+      <div class="subscription-row">
+        <div class="subscription-main">
+          <div class="subscription-name">${esc(x.name)} ${x.matched ? '<span class="media-trip-pill">Matched</span>' : ''}</div>
+          <div class="subscription-meta"><span>${x.source}</span><span>${x.frequency || 'monthly'}</span>${x.amount_note ? `<span>${esc(x.amount_note)}</span>` : ''}</div>
+        </div>
+        <div class="subscription-amount">${fmt.gbp(x.amount)}</div>
+      </div>`).join('')
+    : '<p class="hint-small">No recurring items yet.</p>';
+}
+
+async function openTripDetailModal(tripId) {
+  try {
+    const trip = await api(`/holidays/trips/${tripId}`);
+    const timeline = (trip.timeline || []).map((day) => `
+      <div class="timeline-day">
+        <strong>${esc(day.label)}</strong>
+        ${day.media?.length ? day.media.map((m) => `<span class="media-trip-pill">${esc(m.title)}</span>`).join(' ') : '<span class="hint-small">No media</span>'}
+      </div>`).join('');
+    const packing = (trip.packing || []).map((p) => `<li class="${p.done ? 'done' : ''}">${esc(p.label)}</li>`).join('');
+    const docs = (trip.linked_documents || []).map((d) => `<li>${esc(d.name)} (${esc(d.category)})</li>`).join('');
+    const docOptions = (store.documents?.documents || [])
+      .map((d) => `<option value="${d.id}">${esc(d.name)}</option>`)
+      .join('');
+    document.getElementById('modal-root').innerHTML = `
+      <div class="modal-backdrop" id="modal-backdrop"></div>
+      <div class="wf-modal wf-modal-wide" role="dialog">
+        <div class="wf-modal-header"><h3>${esc(trip.title)}</h3><p>Trip timeline, packing &amp; travel documents</p></div>
+        <div class="wf-modal-body">
+          <h4>Timeline</h4>${timeline || '<p class="hint-small">Add dates and photos to build a timeline.</p>'}
+          <h4 style="margin-top:16px">Packing</h4><ul class="checklist">${packing || '<li>Add packing list from trip card</li>'}</ul>
+          <h4 style="margin-top:16px">Travel documents</h4><ul>${docs || '<li>No documents linked yet</li>'}</ul>
+          ${docOptions ? `
+          <div class="trip-doc-link" style="margin-top:12px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+            <label class="field" style="flex:1;min-width:180px"><span>Link from vault</span>
+              <select id="trip-doc-select">${docOptions}</select>
+            </label>
+            <button type="button" class="btn btn-sm btn-primary wf-action" data-action="link-trip-doc" data-trip-id="${tripId}">Link</button>
+          </div>` : ''}
+        </div>
+        <div class="wf-modal-footer"><button class="btn btn-secondary wf-action" data-action="close-modal">Close</button></div>
+      </div>`;
+    document.getElementById('modal-backdrop').onclick = closeModal;
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 function renderSettings(data) {
-  const { users, sync, notifications, integrations = {} } = data;
+  const { users, sync, notification_log = [], integrations = {} } = data;
   const googleOk = integrations.google_calendar;
   const aiOk = integrations.openrouter;
   const bankOk = integrations.open_banking;
@@ -1151,6 +1279,19 @@ function renderSettings(data) {
       <button class="btn btn-sm btn-primary wf-action" data-action="connect-bank" style="margin-top:10px" ${bankOk ? '' : 'disabled'}>Connect Starling / Revolut / Amex / Virgin</button>
     </div>
     <div class="settings-section">
+      <h3>Email reminders</h3>
+      <p>SMTP renewal alerts — ${integrations.email ? 'configured' : 'add SMTP_* and NOTIFY_EMAIL to .env'}.</p>
+      <button class="btn btn-sm btn-primary wf-action" data-action="send-reminders" ${integrations.email ? '' : 'disabled'}>Send test reminders</button>
+    </div>
+    <div class="settings-section">
+      <h3>Google Calendar write-back</h3>
+      <p>Portal events push to Google — ${integrations.google_writeback ? 'available (reconnect Google after scope update)' : 'configure Google OAuth'}.</p>
+    </div>
+    <div class="settings-section">
+      <h3>Receipt scanning</h3>
+      <p>Vision OCR via OpenRouter — ${integrations.receipt_scan ? 'ready on Finances tab' : 'add OPENROUTER_API_KEY'}.</p>
+    </div>
+    <div class="settings-section">
       <h3>AI — OpenRouter</h3>
       <p>Holiday ideas — ${aiOk ? 'API key configured' : 'add OPENROUTER_API_KEY to .env'}.</p>
       <div class="connection-row">
@@ -1187,7 +1328,7 @@ function renderSettings(data) {
     </div>
     <div class="settings-section">
       <h3>Recent notifications</h3>
-      ${notifications.map((n) => `<div class="list-item" style="padding:10px 0"><div class="list-item-body"><div class="list-item-title">${n.text}</div><div class="list-item-meta">${n.time}</div></div></div>`).join('')}
+      ${notification_log.length ? notification_log.map((n) => `<div class="list-item" style="padding:10px 0"><div class="list-item-body"><div class="list-item-title">${esc(n.subject || n.recipient || 'Email')}</div><div class="list-item-meta">${esc(n.sent_at || '')} · ${esc(n.status || '')}</div></div></div>`).join('') : '<p class="hint-small">No emails sent yet.</p>'}
     </div>`;
 
   document.getElementById('sync-pill').innerHTML = `<span class="sync-dot"></span> Synced ${sync.google_last}`;
@@ -1196,28 +1337,56 @@ function renderSettings(data) {
 function openSearchModal() {
   closeModal();
   closeNotif();
-  const results = SEARCH_RESULTS.map(
-    (r) =>
-      `<button type="button" class="search-result wf-action" data-tab-link="${r.tab}">
-        <span class="search-result-type">${r.type}</span>
-        <strong>${r.label}</strong>
-        <span class="search-result-meta">${r.meta}</span>
-      </button>`
-  ).join('');
 
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop"></div>
     <div class="wf-modal wf-modal-wide" role="dialog">
       <div class="wf-modal-header">
         <h3>Search</h3>
-        <p>Events, bills, appointments, tasks and trips</p>
+        <p>Events, bills, appointments, tasks, trips, documents and more</p>
       </div>
       <div class="wf-modal-body">
-        <label>Search<input type="text" value="dentist" autofocus></label>
-        <div class="search-results">${results}</div>
+        <label class="field field-full">Search<input type="text" id="search-input" placeholder="Try dentist, netflix, boiler…" autofocus></label>
+        <div id="search-results" class="search-results"><p class="hint-small">Type to search the household</p></div>
       </div>
     </div>`;
   document.getElementById('modal-backdrop').onclick = closeModal;
+
+  let searchTimer;
+  const input = document.getElementById('search-input');
+  const resultsEl = document.getElementById('search-results');
+
+  async function runSearch(q) {
+    if (!q.trim()) {
+      resultsEl.innerHTML = '<p class="hint-small">Type to search the household</p>';
+      return;
+    }
+    try {
+      const data = await api(`/search?q=${encodeURIComponent(q.trim())}`);
+      const results = data.results || [];
+      resultsEl.innerHTML = results.length
+        ? results.map((r) => `
+          <button type="button" class="search-result wf-action" data-tab-link="${r.tab}">
+            <span class="search-result-type">${esc(r.type)}</span>
+            <strong>${esc(r.label)}</strong>
+            <span class="search-result-meta">${esc(r.meta || '')}</span>
+          </button>`).join('')
+        : '<p class="hint-small">No matches found.</p>';
+    } catch (err) {
+      resultsEl.innerHTML = `<p class="hint-small">${esc(err.message)}</p>`;
+    }
+  }
+
+  input.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => runSearch(input.value), 250);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      runSearch(input.value);
+    }
+  });
 }
 
 function openLoginPreview() {
@@ -1439,6 +1608,75 @@ function initActions() {
       }
       return;
     }
+    if (action === 'view-trip') {
+      const tripId = btn.dataset.tripId;
+      if (tripId) openTripDetailModal(tripId);
+      return;
+    }
+    if (action === 'add-packing') {
+      const tripId = btn.dataset.tripId;
+      const template = btn.dataset.template || 'beach';
+      if (tripId) {
+        api(`/holidays/trips/${tripId}/packing`, { method: 'POST', body: JSON.stringify({ template }) })
+          .then(() => {
+            showToast('Packing list added');
+            load();
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'link-trip-doc') {
+      const tripId = btn.dataset.tripId;
+      const docId = document.getElementById('trip-doc-select')?.value;
+      if (tripId && docId) {
+        api(`/holidays/trips/${tripId}/documents/${docId}`, { method: 'POST' })
+          .then(() => {
+            showToast('Document linked');
+            openTripDetailModal(tripId);
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'maintenance-done') {
+      const maintId = btn.dataset.maintId;
+      if (maintId) {
+        api(`/maintenance/${maintId}/done`, { method: 'POST' })
+          .then(() => {
+            showToast('Maintenance marked done');
+            load();
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'scan-receipt') {
+      document.getElementById('receipt-file-input')?.click();
+      return;
+    }
+    if (action === 'send-reminders') {
+      api('/notifications/send-reminders', { method: 'POST' })
+        .then((r) => {
+          if (r.sent) showToast(`Sent reminder for ${r.count} item(s)`);
+          else showToast(r.reason || 'No reminders sent');
+        })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'assistant-confirm') {
+      const actionId = btn.dataset.actionId;
+      if (actionId) {
+        api(`/assistant/confirm/${actionId}`, { method: 'POST' })
+          .then((r) => {
+            showToast(r.summary || 'Confirmed');
+            assistantPendingConfirm = null;
+            load();
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
     if (action === 'save-idea') {
       const ideaId = btn.dataset.ideaId;
       if (ideaId) {
@@ -1573,6 +1811,54 @@ function initActions() {
       showToast(err.message, true);
     }
   });
+
+  document.getElementById('maintenance-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const body = {
+      title: form.title.value.trim(),
+      category: form.category.value,
+      next_due_date: form.next_due_date.value,
+      interval_months: parseInt(form.interval_months.value, 10) || 12,
+      vendor: form.vendor.value.trim(),
+      notes: form.notes.value.trim(),
+    };
+    try {
+      await api('/maintenance', { method: 'POST', body: JSON.stringify(body) });
+      form.reset();
+      showToast('Maintenance item added');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
+
+  document.getElementById('receipt-file-input')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('account', 'joint');
+    try {
+      showToast('Scanning receipt…');
+      const res = await fetch(`${API}/finances/scan-receipt`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Scan failed');
+      }
+      const data = await res.json();
+      showToast(`Logged: ${data.transaction?.description || 'transaction'}`);
+      switchTab('finances');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+    e.target.value = '';
+  });
 }
 
 function closeNotif() {
@@ -1592,17 +1878,22 @@ const TOOL_LABELS = {
   add_bill: 'Added bill',
   log_transaction: 'Logged transaction',
   list_tasks: 'Listed tasks',
+  get_morning_briefing: 'Morning briefing',
+  search_household: 'Searched household',
+  create_maintenance_item: 'Added maintenance',
+  add_trip_packing_list: 'Added packing list',
 };
 
 let assistantOpen = false;
 let assistantBusy = false;
 let assistantConfigured = false;
 let assistantMessages = [];
+let assistantPendingConfirm = null;
 
 function renderAssistantMessages(messages, pending = false) {
   const el = document.getElementById('assistant-messages');
-  if (!messages.length && !pending) {
-    el.innerHTML = '<div class="assistant-msg system">Try: “Add dinner with Mum next Saturday” or “Help me plan a holiday to Portugal”</div>';
+  if (!messages.length && !pending && !assistantPendingConfirm) {
+    el.innerHTML = '<div class="assistant-msg system">Try: “What’s on today?” or “Add boiler service next March”</div>';
     return;
   }
   el.innerHTML = messages.map((m) => {
@@ -1611,6 +1902,13 @@ function renderAssistantMessages(messages, pending = false) {
     ).join('');
     return `<div class="assistant-msg ${m.role}">${esc(m.content)}${actions ? `<div class="assistant-actions">${actions}</div>` : ''}</div>`;
   }).join('');
+  if (assistantPendingConfirm) {
+    el.innerHTML += `
+      <div class="assistant-confirm-bar">
+        <p>${esc(assistantPendingConfirm.summary)}</p>
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="assistant-confirm" data-action-id="${esc(assistantPendingConfirm.pending_id)}">Confirm</button>
+      </div>`;
+  }
   if (pending) {
     el.innerHTML += '<div class="assistant-typing"><span></span><span></span><span></span></div>';
   }
@@ -1663,6 +1961,7 @@ async function sendAssistantMessage(text) {
       content: result.reply,
       actions: result.actions || [],
     });
+    assistantPendingConfirm = result.pending_confirmation || null;
     renderAssistantMessages(assistantMessages);
     if (result.data_changed) await load();
   } catch (err) {
@@ -1709,6 +2008,7 @@ function initAssistant() {
     try {
       await api('/assistant/clear', { method: 'POST' });
       assistantMessages = [];
+      assistantPendingConfirm = null;
       renderAssistantMessages([]);
       showToast('New conversation started');
     } catch (err) {
@@ -1743,7 +2043,7 @@ async function load() {
     return;
   }
 
-  const [dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings] = await Promise.all([
+  const [dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance] = await Promise.all([
     api('/dashboard'),
     api('/calendar'),
     api('/finances'),
@@ -1753,17 +2053,25 @@ async function load() {
     api('/media'),
     api('/subscriptions'),
     api('/settings'),
+    api('/briefing'),
+    api('/activity'),
+    api('/renewals'),
+    api('/maintenance'),
   ]);
 
-  store = { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings };
+  store = { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance };
 
   renderMembers(dashboard.users);
   renderWelcome(dashboard);
+  renderBriefing(briefing);
   renderActionGrid();
   renderReminders(dashboard.reminders);
   renderHome(dashboard);
+  renderActivityFeed(activity);
   renderCalendar(calendar);
   renderFinances(finances);
+  renderRenewals(renewals);
+  renderMaintenance(maintenance);
   renderAppointments(appointments);
   renderHolidays(holidays);
   renderMedia(media);
