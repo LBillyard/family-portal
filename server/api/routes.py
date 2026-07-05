@@ -117,15 +117,17 @@ def google_start(request: Request, user: dict = Depends(require_user)):
     if not google_calendar.is_configured():
         raise HTTPException(status_code=503, detail="Google Calendar not configured — add credentials to .env")
     state = secrets.token_urlsafe(16)
+    url, verifier = google_calendar.authorization_url(state)
     request.session["google_oauth_state"] = state
     request.session["google_oauth_user"] = user["id"]
-    url = google_calendar.authorization_url(state)
+    request.session["google_oauth_verifier"] = verifier
     return RedirectResponse(url)
 
 
 def _clear_google_oauth_session(request: Request) -> None:
     request.session.pop("google_oauth_state", None)
     request.session.pop("google_oauth_user", None)
+    request.session.pop("google_oauth_verifier", None)
 
 
 @router.get("/auth/google/callback")
@@ -135,6 +137,7 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
         return RedirectResponse("/?google_error=1")
     expected = request.session.get("google_oauth_state")
     user_id = request.session.get("google_oauth_user")
+    verifier = request.session.get("google_oauth_verifier")
     if not expected or state != expected or not user_id:
         _clear_google_oauth_session(request)
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
@@ -143,21 +146,37 @@ def google_callback(request: Request, code: str = "", state: str = "", error: st
         _clear_google_oauth_session(request)
         return RedirectResponse(f"/?google_error={quote('Session mismatch — sign in and try again')}")
     try:
-        token = google_calendar.exchange_code(code)
-        db.save_google_token(user_id, __import__("json").dumps(token))
-        google_calendar.sync_user_calendar(user_id)
+        token = google_calendar.exchange_code(code, verifier)
+        token_json = __import__("json").dumps(token)
+        email = google_calendar.account_email(token_json)
+        account_id = db.upsert_google_account(user_id, email, token_json)
+        internal = db.get_google_account_internal(account_id)
+        google_calendar.sync_account(internal)
     except Exception as exc:
         _clear_google_oauth_session(request)
-        return RedirectResponse(f"/?google_error={quote(str(exc)[:80])}")
+        return RedirectResponse(f"/?google_error={quote(str(exc)[:120])}")
     _clear_google_oauth_session(request)
     return RedirectResponse("/?google_connected=1")
+
+
+@router.get("/google/accounts")
+def google_accounts_list(_: dict = Depends(require_user)):
+    return {"accounts": db.list_google_accounts(), "configured": google_calendar.is_configured()}
+
+
+@router.delete("/google/accounts/{account_id}")
+def google_account_disconnect(account_id: str, _: dict = Depends(require_user)):
+    ok = db.delete_google_account(account_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Google account not found")
+    return {"ok": True}
 
 
 @router.post("/calendar/sync")
 def calendar_sync(_: dict = Depends(require_user)):
     if not google_calendar.is_configured():
         raise HTTPException(status_code=503, detail="Google Calendar not configured")
-    results = google_calendar.sync_all_users()
+    results = google_calendar.sync_all()
     return {"synced": results, "google_last": db.get_setting("google_last_sync", "just now")}
 
 
@@ -1001,6 +1020,7 @@ def api_settings(_: dict = Depends(require_user)):
         "users": users,
         "documents": db.list_documents(),
         "sync": {"google_last": db.get_setting("google_last_sync", "never"), "status": "ok"},
+        "google_accounts": db.list_google_accounts(),
         "integrations": {
             "google_calendar": google_calendar.is_configured(),
             "openrouter": openrouter.is_configured(),

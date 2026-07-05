@@ -1599,7 +1599,7 @@ async function openTripDetailModal(tripId) {
 }
 
 function renderSettings(data) {
-  const { users, sync, notification_log = [], integrations = {} } = data;
+  const { users, sync, notification_log = [], integrations = {}, google_accounts = [] } = data;
   const googleOk = integrations.google_calendar;
   const aiOk = integrations.openrouter;
   const bankOk = integrations.open_banking;
@@ -1629,22 +1629,25 @@ function renderSettings(data) {
     </div>
     <div class="settings-section">
       <h3>Calendar connections</h3>
-      <p>Google Calendar OAuth — ${googleOk ? 'configured' : 'add GOOGLE_CLIENT_ID to .env'}.</p>
-      ${users
-        .map(
-          (u) => `
+      <p>Connect as many Google accounts as you like — personal and work both sync in. Add each while signed in as its owner. ${googleOk ? '' : 'Add GOOGLE_CLIENT_ID to .env first.'}</p>
+      ${google_accounts.length
+        ? google_accounts
+            .map(
+              (a) => `
         <div class="connection-row">
           <div class="connection-info">
             <div class="connection-icon">📅</div>
             <div>
-              <div class="connection-name">${u.name} — Google Calendar</div>
-              <div class="connection-status ${u.google_connected ? 'connected' : ''}">${u.google_connected ? 'Connected · Last sync ' + sync.google_last : 'Not connected'}</div>
+              <div class="connection-name">${esc(a.email)}</div>
+              <div class="connection-status connected">${userName(users, a.user_id)} · ${a.last_synced_at ? 'synced ' + fmt.datetime(a.last_synced_at) : 'connected'}</div>
             </div>
           </div>
-          <button class="btn btn-sm ${u.google_connected ? 'btn-secondary' : 'btn-primary'} wf-action" data-action="connect-google" ${googleOk ? '' : 'disabled title="Configure Google OAuth in .env"'}>${u.google_connected ? 'Reconnect' : 'Connect'}</button>
+          <button class="btn btn-sm btn-outline wf-action" data-action="disconnect-google" data-account-id="${a.id}" data-email="${esc(a.email)}">Remove</button>
         </div>`
-        )
-        .join('')}
+            )
+            .join('')
+        : `<p style="font-size:0.875rem;color:var(--text-muted)">No Google accounts connected yet.</p>`}
+      <button class="btn btn-sm btn-primary wf-action" data-action="connect-google" style="margin-top:10px" ${googleOk ? '' : 'disabled title="Configure Google OAuth in .env"'}>+ Add Google account${currentUser ? ' (as ' + esc(currentUser.name) + ')' : ''}</button>
     </div>
     <div class="settings-section">
       <h3>Bank connections</h3>
@@ -1864,6 +1867,17 @@ function initActions() {
     }
     if (action === 'connect-google') {
       window.location.href = `${API}/auth/google/start`;
+      return;
+    }
+    if (action === 'disconnect-google') {
+      const email = btn.dataset.email || 'this account';
+      if (!confirm(`Remove ${email}? Its calendar events will be deleted from the portal.`)) return;
+      api(`/google/accounts/${btn.dataset.accountId}`, { method: 'DELETE' })
+        .then(() => {
+          showToast(`Removed ${email}`);
+          load();
+        })
+        .catch((err) => showToast(err.message, true));
       return;
     }
     if (action === 'sync-calendar') {

@@ -460,6 +460,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
     ecols = {r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()}
     if "google_event_id_written" not in ecols:
         conn.execute("ALTER TABLE events ADD COLUMN google_event_id_written TEXT")
+    if "google_account_id" not in ecols:
+        conn.execute("ALTER TABLE events ADD COLUMN google_account_id TEXT")
+    if "calendar_name" not in ecols:
+        conn.execute("ALTER TABLE events ADD COLUMN calendar_name TEXT")
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS google_accounts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            email TEXT NOT NULL,
+            token_json TEXT NOT NULL,
+            label TEXT,
+            created_at TEXT NOT NULL,
+            last_synced_at TEXT,
+            UNIQUE(user_id, email)
+        )"""
+    )
 
     maint_count = conn.execute("SELECT COUNT(*) AS c FROM maintenance_items").fetchone()["c"]
     if maint_count == 0:
@@ -738,6 +755,7 @@ def _event_out(r: dict) -> dict:
         "source": r["source"],
         "all_day": bool(r["all_day"]),
         "location": r.get("location"),
+        "calendar_name": r.get("calendar_name"),
     }
 
 
@@ -1369,25 +1387,90 @@ def save_google_token(user_id: str, token_json: str) -> None:
         conn.execute("UPDATE users SET google_token_json = ? WHERE id = ?", (_enc(token_json), user_id))
 
 
-def upsert_google_event(user_id: str, google_id: str, title: str, start: str, end: str | None, all_day: bool, location: str | None) -> None:
+# --- Google accounts (multiple per user: e.g. personal + work) ---
+
+def upsert_google_account(user_id: str, email: str, token_json: str, label: str | None = None) -> str:
+    """Insert or update a connected Google account, keyed by (user, email). Returns its id."""
     now = _utcnow()
     with get_conn() as conn:
-        existing = conn.execute(
-            "SELECT id FROM events WHERE google_event_id = ? AND user_id = ?",
-            (google_id, user_id),
+        row = conn.execute(
+            "SELECT id FROM google_accounts WHERE user_id = ? AND email = ?", (user_id, email)
         ).fetchone()
-        if existing:
+        if row:
             conn.execute(
-                """UPDATE events SET title = ?, start_at = ?, end_at = ?, all_day = ?, location = ?, source = 'google'
-                   WHERE id = ?""",
-                (title, start, end, int(all_day), location, existing["id"]),
+                "UPDATE google_accounts SET token_json = ?, label = COALESCE(?, label) WHERE id = ?",
+                (_enc(token_json), label, row["id"]),
             )
+            return row["id"]
+        aid = _new_id()
+        conn.execute(
+            """INSERT INTO google_accounts (id, user_id, email, token_json, label, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (aid, user_id, email, _enc(token_json), label, now),
+        )
+        return aid
+
+
+def list_google_accounts(user_id: str | None = None) -> list[dict]:
+    """Public rows (no token). Optionally scoped to one portal user."""
+    with get_conn() as conn:
+        if user_id:
+            rows = conn.execute(
+                "SELECT id, user_id, email, label, last_synced_at FROM google_accounts WHERE user_id = ? ORDER BY created_at",
+                (user_id,),
+            ).fetchall()
         else:
-            conn.execute(
-                """INSERT INTO events (id, user_id, title, start_at, end_at, all_day, source, location, google_event_id, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 'google', ?, ?, ?)""",
-                (_new_id(), user_id, title, start, end, int(all_day), location, google_id, now),
-            )
+            rows = conn.execute(
+                "SELECT id, user_id, email, label, last_synced_at FROM google_accounts ORDER BY created_at"
+            ).fetchall()
+        return [row_to_dict(r) for r in rows]
+
+
+def get_google_account_internal(account_id: str) -> dict | None:
+    """Full row with decrypted token_json — server-side only."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM google_accounts WHERE id = ?", (account_id,)).fetchone()
+        if not row:
+            return None
+        d = row_to_dict(row)
+        d["token_json"] = _dec(d["token_json"])
+        return d
+
+
+def update_google_account_token(account_id: str, token_json: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE google_accounts SET token_json = ? WHERE id = ?", (_enc(token_json), account_id))
+
+
+def mark_google_account_synced(account_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE google_accounts SET last_synced_at = ? WHERE id = ?", (_utcnow(), account_id))
+
+
+def delete_google_account(account_id: str) -> bool:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM events WHERE google_account_id = ?", (account_id,))
+        cur = conn.execute("DELETE FROM google_accounts WHERE id = ?", (account_id,))
+        return cur.rowcount > 0
+
+
+def delete_events_for_google_account(account_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM events WHERE google_account_id = ?", (account_id,))
+
+
+def create_google_event(*, user_id: str, google_account_id: str, google_id: str, title: str,
+                        start: str, end: str | None, all_day: bool, location: str | None,
+                        calendar_name: str | None = None) -> None:
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO events (id, user_id, title, start_at, end_at, all_day, source, location,
+                                   google_event_id, google_account_id, calendar_name, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'google', ?, ?, ?, ?, ?)""",
+            (_new_id(), user_id, title, start, end, int(all_day), location, google_id,
+             google_account_id, calendar_name, now),
+        )
 
 
 def create_holiday_ideas(ideas: list[dict]) -> list[dict]:

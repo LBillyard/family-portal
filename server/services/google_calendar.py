@@ -1,4 +1,9 @@
-"""Google Calendar OAuth and sync."""
+"""Google Calendar OAuth + multi-account, multi-calendar sync.
+
+Each person can connect several Google accounts (e.g. personal + work). Each
+connection is a row in `google_accounts`; syncing pulls events from every
+selected calendar in that account. Re-sync replaces that account's events.
+"""
 
 import json
 import logging
@@ -36,21 +41,26 @@ def is_configured() -> bool:
     return bool(os.environ.get("GOOGLE_CLIENT_ID") and os.environ.get("GOOGLE_CLIENT_SECRET"))
 
 
-def authorization_url(state: str) -> str:
+def authorization_url(state: str) -> tuple[str, str]:
+    """Returns (url, code_verifier). The verifier must be stored and passed back
+    to exchange_code() — without it Google rejects the token exchange (PKCE)."""
     from google_auth_oauthlib.flow import Flow
 
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES, redirect_uri=redirect_uri())
-    url, _ = flow.authorization_url(access_type="offline", prompt="consent", state=state)
-    return url
+    url, _ = flow.authorization_url(
+        access_type="offline", prompt="consent", include_granted_scopes="true", state=state
+    )
+    return url, flow.code_verifier
 
 
-def exchange_code(code: str) -> dict:
+def exchange_code(code: str, code_verifier: str | None = None) -> dict:
     from google_auth_oauthlib.flow import Flow
 
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES, redirect_uri=redirect_uri())
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code)
-    creds = flow.credentials
-    return json.loads(creds.to_json())
+    return json.loads(flow.credentials.to_json())
 
 
 def _credentials(token_json: str):
@@ -59,97 +69,113 @@ def _credentials(token_json: str):
     return Credentials.from_authorized_user_info(json.loads(token_json), SCOPES)
 
 
-def sync_user_calendar(user_id: str) -> int:
-    """Pull primary calendar events for the next 120 days. Returns count synced."""
-    user = db.get_user(user_id)
-    if not user or not user.get("google_token_json"):
-        return 0
-
+def _service(creds):
     from googleapiclient.discovery import build
 
-    creds = _credentials(user["google_token_json"])
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
+
+def account_email(token_json: str) -> str:
+    """The primary calendar's id is the account's email address."""
+    creds = _credentials(token_json)
+    cal = _service(creds).calendars().get(calendarId="primary").execute()
+    return cal.get("id", "") or ""
+
+
+def sync_account(account: dict) -> int:
+    """Sync every selected calendar of one connected account (decrypted token_json)."""
+    creds = _credentials(account["token_json"])
+    service = _service(creds)
     now = datetime.now(timezone.utc)
     time_min = now.isoformat()
     time_max = (now + timedelta(days=120)).isoformat()
 
-    events_result = (
-        service.events()
-        .list(
-            calendarId="primary",
-            timeMin=time_min,
-            timeMax=time_max,
-            singleEvents=True,
-            orderBy="startTime",
-            maxResults=250,
-        )
-        .execute()
-    )
-
+    db.delete_events_for_google_account(account["id"])
     count = 0
-    for item in events_result.get("items", []):
-        start = item.get("start", {})
-        end = item.get("end", {})
-        all_day = "date" in start
-        start_at = start.get("dateTime") or start.get("date", "")
-        end_at = end.get("dateTime") or end.get("date")
-        if not start_at:
-            continue
-        db.upsert_google_event(
-            user_id=user_id,
-            google_id=item["id"],
-            title=item.get("summary", "Busy"),
-            start=start_at,
-            end=end_at,
-            all_day=all_day,
-            location=item.get("location"),
-        )
-        count += 1
+    try:
+        cal_items = service.calendarList().list().execute().get("items", [])
+    except Exception:
+        cal_items = [{"id": "primary", "primary": True}]
 
+    for cal in cal_items:
+        if not (cal.get("primary") or cal.get("selected")):
+            continue
+        cal_id = cal.get("id", "primary")
+        cal_name = cal.get("summaryOverride") or cal.get("summary") or ""
+        try:
+            events_result = (
+                service.events()
+                .list(
+                    calendarId=cal_id,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy="startTime",
+                    maxResults=250,
+                )
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning("Calendar %s list failed: %s", cal_id, exc)
+            continue
+        for item in events_result.get("items", []):
+            start = item.get("start", {})
+            end = item.get("end", {})
+            start_at = start.get("dateTime") or start.get("date", "")
+            if not start_at:
+                continue
+            db.create_google_event(
+                user_id=account["user_id"],
+                google_account_id=account["id"],
+                google_id=item.get("id", ""),
+                title=item.get("summary", "Busy"),
+                start=start_at,
+                end=end.get("dateTime") or end.get("date"),
+                all_day="date" in start,
+                location=item.get("location"),
+                calendar_name=cal_name,
+            )
+            count += 1
+
+    try:
+        db.update_google_account_token(account["id"], creds.to_json())
+    except Exception:
+        pass
+    db.mark_google_account_synced(account["id"])
     db.set_setting("google_last_sync", datetime.now().strftime("%H:%M today"))
-    logger.info("Synced %d Google events for user %s", count, user_id)
+    logger.info("Synced %d events for Google account %s", count, account.get("email"))
     return count
 
 
-def sync_all_users() -> dict:
+def sync_all() -> dict:
     results = {}
-    for user in db.list_users():
-        if user.get("google_token_json"):
-            try:
-                results[user["id"]] = sync_user_calendar(user["id"])
-            except Exception as exc:
-                logger.exception("Google sync failed for %s", user["id"])
-                results[user["id"]] = f"error: {exc}"
+    for pub in db.list_google_accounts():
+        acct = db.get_google_account_internal(pub["id"])
+        if not acct:
+            continue
+        try:
+            results[acct["email"]] = sync_account(acct)
+        except Exception as exc:
+            logger.exception("Google sync failed for %s", acct.get("email"))
+            results[acct.get("email", acct["id"])] = f"error: {exc}"
     return results
 
 
 def push_event_to_google(user_id: str, event: dict) -> str | None:
-    """Create a portal event on the user's Google Calendar. Returns Google event id."""
-    user = db.get_user(user_id)
-    if not user or not user.get("google_token_json"):
+    """Write a portal event to the user's first connected Google account."""
+    accounts = db.list_google_accounts(user_id)
+    if not accounts:
         return None
-
-    from googleapiclient.discovery import build
-
-    creds = _credentials(user["google_token_json"])
-    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-
-    body: dict = {
-        "summary": event["title"],
-        "location": event.get("location") or "",
-    }
+    acct = db.get_google_account_internal(accounts[0]["id"])
+    if not acct:
+        return None
+    service = _service(_credentials(acct["token_json"]))
+    body: dict = {"summary": event["title"], "location": event.get("location") or ""}
     if event.get("all_day"):
-        start_d = event["start"][:10]
-        end_d = (event.get("end") or event["start"])[:10]
-        body["start"] = {"date": start_d}
-        body["end"] = {"date": end_d}
+        body["start"] = {"date": event["start"][:10]}
+        body["end"] = {"date": (event.get("end") or event["start"])[:10]}
     else:
         body["start"] = {"dateTime": event["start"], "timeZone": "Europe/London"}
         body["end"] = {"dateTime": event.get("end") or event["start"], "timeZone": "Europe/London"}
-
     created = service.events().insert(calendarId="primary", body=body).execute()
-    gid = created.get("id")
-    if gid and event.get("id"):
-        db.set_event_google_written(event["id"], gid)
-    return gid
+    return created.get("id")
