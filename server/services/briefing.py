@@ -116,7 +116,7 @@ def whatsapp_digest_line(user: dict | None = None) -> str:
         parts.append("✅ due: " + ", ".join(t["title"] for t in tasks[:4]))
     rn = b["urgent_renewals"]
     if rn:
-        parts.append("🔔 " + ", ".join(f"{r['name']} ({r['days_until']}d)" for r in rn[:3]))
+        parts.append("🔔 " + ", ".join(f"{r.get('title') or r.get('name')} ({r['days_until']}d)" for r in rn[:3]))
     trip = b["next_trip"]
     if trip and trip.get("days_until") is not None:
         parts.append(f"✈️ {trip['title']} in {trip['days_until']}d")
