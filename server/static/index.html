@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Family Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0f1d32">
+  <link rel="stylesheet" href="/static/style.css?v=10">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M16 4c-4 0-8 3-10 7-2 4-1 9 2 12 3 3 8 4 12 2 4-2 7-6 7-10 0-6-5-11-11-11z" stroke="currentColor" stroke-width="1.75"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/><circle cx="20" cy="14" r="1.5" fill="currentColor"/><path d="M13 19c1.5 1.5 4.5 1.5 6 0" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">Family Portal</span>
+          <span class="brand-sub">Calendar · Finances · Vault · Holidays</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <span id="sync-pill" class="sync-pill"><span class="sync-dot"></span> Synced</span>
+        <button type="button" class="header-btn wf-action" data-action="search" data-modal="search" title="Search" aria-label="Search">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+        </button>
+        <button type="button" id="notif-btn" class="header-btn" title="Notifications" aria-label="Notifications">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z"/></svg>
+          <span id="notif-badge" class="notif-badge" hidden>0</span>
+        </button>
+        <button type="button" class="header-btn wf-action" data-action="open-settings" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/></svg>
+        </button>
+        <span class="badge wf">Live</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wf-banner live-banner">
+    <strong>Family Portal</strong> — live data saved to SQLite. Sign in with your household account.
+  </div>
+
+  <div class="member-bar">
+    <span class="member-bar-label">Household</span>
+    <div id="member-chips" class="member-chips"></div>
+  </div>
+
+  <div id="notif-panel" class="notif-panel" hidden>
+    <div class="notif-panel-inner">
+      <div class="notif-panel-header">
+        <h2 style="font-size:1rem;font-weight:700;color:var(--navy-900)">Notifications</h2>
+        <button type="button" id="notif-close" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div id="notif-list"></div>
+    </div>
+  </div>
+  <div id="notif-backdrop" class="monitor-backdrop" hidden></div>
+
+  <div class="app-shell">
+    <nav class="tabs" aria-label="Main navigation">
+      <button class="tab active" data-tab="home">
+        <svg class="tab-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg>
+        Home
+      </button>
+      <button class="tab" data-tab="calendar">
+        <svg class="tab-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clip-rule="evenodd"/></svg>
+        Calendar
+      </button>
+      <button class="tab" data-tab="finances">
+        <svg class="tab-icon" viewBox="0 0 20 20" fill="currentColor"><path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z"/><path fill-rule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clip-rule="evenodd"/></svg>
+        Finances
+      </button>
+      <button class="tab" data-tab="appointments">
+        <svg class="tab-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
+        Appointments
+      </button>
+      <button class="tab" data-tab="holidays">
+        <svg class="tab-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>
+        Holidays
+      </button>
+      <button class="tab" data-tab="documents">
+        <svg class="tab-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/></svg>
+        Vault
+      </button>
+      <button class="tab" data-tab="settings">
+        <svg class="tab-icon" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/></svg>
+        Settings
+      </button>
+    </nav>
+
+    <main class="main-content">
+
+      <!-- HOME -->
+      <section id="tab-home" class="tab-panel active">
+        <div id="welcome-hero" class="welcome-hero"></div>
+
+        <div id="action-grid" class="action-grid"></div>
+
+        <div id="reminder-strip" class="reminder-strip" style="margin-bottom:24px"></div>
+
+        <div id="home-stats" class="stats-row"></div>
+
+        <div class="dashboard-grid">
+          <div class="card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>This week</h3><p>Google Calendar + portal events</p></div>
+              <button class="card-link-btn wf-action" data-action="add-event">+ Add</button>
+            </div>
+            <div id="home-events"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Shared tasks</h3><p>Household to-do list</p></div>
+              <button class="card-link-btn wf-action" data-action="add-task">+ Task</button>
+            </div>
+            <div id="home-tasks"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Bills due soon</h3><p>Upcoming payments</p></div>
+              <button class="card-link-btn wf-action" data-tab-link="finances">View all</button>
+            </div>
+            <div id="home-bills"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Appointments</h3><p>Next 7 days</p></div>
+              <button class="card-link-btn wf-action" data-tab-link="appointments">View all</button>
+            </div>
+            <div id="home-appointments"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Next holiday</h3><p>Countdown &amp; checklist</p></div>
+              <button class="card-link-btn wf-action" data-tab-link="holidays">Plan trip</button>
+            </div>
+            <div id="home-holiday"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Document alerts</h3><p>Expiry &amp; renewals</p></div>
+              <button class="card-link-btn wf-action" data-tab-link="documents">Open vault</button>
+            </div>
+            <div id="home-documents"></div>
+          </div>
+
+          <div class="card span-2">
+            <div class="card-header"><h3>Monthly finances</h3><p>Income vs spending · July 2026</p></div>
+            <div id="home-finance"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CALENDAR -->
+      <section id="tab-calendar" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Calendar</h2>
+          <p class="panel-desc">Merged view from Google Calendar and family events.</p>
+        </div>
+
+        <div class="card-toolbar">
+          <div class="toolbar-actions">
+            <button class="btn btn-primary wf-action" data-action="connect-google">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10 2a8 8 0 100 16 8 8 0 000-16zm1 11H9v-2h2v2zm0-4H9V5h2v4z"/></svg>
+              Connect Google
+            </button>
+            <button class="btn btn-soft wf-action" data-action="add-event" data-modal="add-event">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+              Add event
+            </button>
+            <button class="btn btn-secondary wf-action" data-action="sync-calendar">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
+              Sync now
+            </button>
+          </div>
+          <div class="toolbar-filters" id="cal-filters"></div>
+        </div>
+
+        <div class="two-col">
+          <div class="card">
+            <div class="cal-nav">
+              <div class="cal-nav-btns">
+                <button class="btn btn-sm btn-ghost wf-action" data-action="cal-prev">←</button>
+                <button class="btn btn-sm btn-soft wf-action" data-action="cal-today">Today</button>
+                <button class="btn btn-sm btn-ghost wf-action" data-action="cal-next">→</button>
+              </div>
+              <h3 id="cal-month-label">July 2026</h3>
+              <div class="btn-group">
+                <button class="btn-seg active wf-action" data-action="cal-view-month">Month</button>
+                <button class="btn-seg wf-action" data-action="cal-view-week">Week</button>
+                <button class="btn-seg wf-action" data-action="cal-view-agenda">Agenda</button>
+              </div>
+            </div>
+            <div id="calendar-grid" class="calendar-week"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>Agenda</h3><p>Upcoming events with locations</p></div>
+            <div id="calendar-agenda"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FINANCES -->
+      <section id="tab-finances" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Finances</h2>
+          <p class="panel-desc">Starling, Revolut, Amex and Virgin — connect via Open Banking or import CSV.</p>
+        </div>
+
+        <div id="finance-stats" class="stats-row"></div>
+        <div id="bank-connections" class="card" style="margin-bottom:16px;display:none"></div>
+        <div id="accounts-row" class="accounts-row"></div>
+
+        <div class="card-toolbar">
+          <div class="toolbar-actions">
+            <button class="btn btn-primary wf-action" data-action="log-expense" data-modal="log-expense">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+              Log transaction
+            </button>
+            <button class="btn btn-soft wf-action" data-action="add-bill" data-modal="add-bill">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 4a2 2 0 00-2 2v4a2 2 0 002 2V6h10a2 2 0 00-2-2H4zm2 6a2 2 0 012-2h8a2 2 0 012 2v4a2 2 0 01-2 2H8a2 2 0 01-2-2v-4zm6 4a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>
+              Add bill
+            </button>
+            <button class="btn btn-outline wf-action" data-action="transfer">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M7.707 3.293a1 1 0 010 1.414L5.414 7H11a7 7 0 017 7v2a1 1 0 11-2 0v-2a5 5 0 00-5-5H5.414l2.293 2.293a1 1 0 11-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
+              Transfer
+            </button>
+            <button class="btn btn-secondary wf-action" data-action="import-csv">Import CSV</button>
+            <button class="btn btn-primary wf-action" data-action="connect-bank" id="connect-bank-btn">Connect bank</button>
+            <button class="btn btn-secondary wf-action" data-action="sync-banks">Sync all banks</button>
+          </div>
+        </div>
+
+        <div class="three-col">
+          <div class="card">
+            <div class="card-header"><h3>Monthly bills</h3><p>Recurring payments</p></div>
+            <div id="finance-bills"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>Budget targets</h3><p>Spending vs limits</p></div>
+            <div id="finance-budgets" class="budget-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3>Savings goals</h3><p>Progress trackers</p></div>
+            <div id="finance-savings" class="savings-grid"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:20px">
+          <div class="card-header-row">
+            <div class="card-header"><h3>Recent transactions</h3><p>Manual log — newest first</p></div>
+            <button class="btn btn-sm btn-outline wf-action" data-action="export-transactions">Export</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead>
+              <tbody id="finance-transactions"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- APPOINTMENTS -->
+      <section id="tab-appointments" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Appointments</h2>
+          <p class="panel-desc">Health, dental, car, vet — with reminders and calendar sync.</p>
+        </div>
+
+        <div class="card-toolbar">
+          <div class="toolbar-actions">
+            <button class="btn btn-primary wf-action" data-action="add-appointment" data-modal="add-appointment">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+              New appointment
+            </button>
+            <button class="btn btn-soft wf-action" data-action="sync-appointments">Sync to calendar</button>
+          </div>
+          <div class="toolbar-filters">
+            <label class="filter-chip"><input type="radio" name="appt-filter" value="all" checked><span>All</span></label>
+            <label class="filter-chip"><input type="radio" name="appt-filter" value="upcoming"><span>Upcoming</span></label>
+            <label class="filter-chip"><input type="radio" name="appt-filter" value="completed"><span>Completed</span></label>
+          </div>
+        </div>
+
+        <div class="category-filters" id="appt-categories"></div>
+
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>When</th><th>Appointment</th><th>Provider</th><th>Location</th><th>Person</th><th>Category</th><th>Status</th><th></th></tr></thead>
+            <tbody id="appointments-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- HOLIDAYS -->
+      <section id="tab-holidays" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Holidays</h2>
+          <p class="panel-desc">Ideas, planning, bookings and checklists — powered by OpenRouter AI.</p>
+        </div>
+
+        <div class="ai-prompt-box">
+          <h3>✨ Where should we go next?</h3>
+          <p>Describe your ideal trip — AI suggests destinations, budgets and itineraries via OpenRouter.</p>
+          <div class="ai-input-row">
+            <input type="text" id="ai-prompt-input" placeholder="e.g. Beach holiday under £2k in August, max 4hr flight" value="Beach holiday under £2k in August">
+            <button class="btn btn-ai wf-action" id="ai-generate-btn" data-action="holiday-idea">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z"/></svg>
+              Generate ideas
+            </button>
+          </div>
+        </div>
+
+        <div class="card-toolbar">
+          <div class="toolbar-actions">
+            <button class="btn btn-primary wf-action" data-action="new-trip" data-modal="new-trip">
+              <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+              New trip
+            </button>
+            <button class="btn btn-outline wf-action" data-action="compare-trips">Compare trips</button>
+          </div>
+          <div class="btn-group">
+            <button class="btn-seg active wf-action" data-action="filter-all-trips">All</button>
+            <button class="btn-seg wf-action" data-action="filter-booked">Booked</button>
+            <button class="btn-seg wf-action" data-action="filter-planning">Planning</button>
+            <button class="btn-seg wf-action" data-action="filter-ideas">Ideas</button>
+          </div>
+        </div>
+
+        <div class="card-header" style="margin-bottom:16px"><h3 style="font-size:1.0625rem;font-weight:700;color:var(--navy-900)">Your trips</h3></div>
+        <div id="holiday-trips" class="holiday-grid" style="margin-bottom:28px"></div>
+
+        <div class="card-header" style="margin-bottom:16px">
+          <h3 style="font-size:1.0625rem;font-weight:700;color:var(--navy-900)">Saved ideas</h3>
+          <p style="font-size:0.875rem;color:var(--text-muted)">From AI suggestions — tap to start planning</p>
+        </div>
+        <div id="holiday-ideas" class="holiday-grid"></div>
+      </section>
+
+      <!-- DOCUMENT VAULT -->
+      <section id="tab-documents" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Document vault</h2>
+          <p class="panel-desc">Upload insurance policies, passports, MOT certificates and other important household files.</p>
+        </div>
+
+        <div class="card vault-upload-card">
+          <div class="card-header"><h3>Upload a document</h3><p>PDF, Word, or images — max 15 MB</p></div>
+          <form id="vault-upload-form" class="vault-upload-form">
+            <div class="vault-form-grid">
+              <label class="field">
+                <span>Document name</span>
+                <input type="text" name="name" placeholder="e.g. Home insurance 2026" required>
+              </label>
+              <label class="field">
+                <span>Category</span>
+                <select name="category" id="vault-category-select">
+                  <option value="insurance">Insurance</option>
+                  <option value="passport">Passport &amp; ID</option>
+                  <option value="mot">MOT &amp; vehicle</option>
+                  <option value="legal">Legal &amp; wills</option>
+                  <option value="medical">Medical</option>
+                  <option value="finance">Finance &amp; tax</option>
+                  <option value="property">Property</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Expiry date <small>(optional)</small></span>
+                <input type="date" name="expiry">
+              </label>
+              <label class="field field-full">
+                <span>Notes <small>(optional)</small></span>
+                <input type="text" name="notes" placeholder="Policy number, provider, renewal reminder…">
+              </label>
+              <label class="field field-full vault-file-field">
+                <span>File</span>
+                <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.doc,.docx" required>
+              </label>
+            </div>
+            <button type="submit" class="btn btn-primary">Upload to vault</button>
+          </form>
+        </div>
+
+        <div class="card-toolbar" style="margin-top:20px">
+          <div id="vault-filters" class="toolbar-filters"></div>
+        </div>
+
+        <div id="vault-stats" class="stats-row vault-stats"></div>
+        <div id="vault-grid" class="vault-grid"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="tab-settings" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Settings</h2>
+          <p class="panel-desc">Connections, household members and preferences.</p>
+        </div>
+
+        <div id="settings-content"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    Family Portal <span class="footer-dot">·</span> Local dev <span class="footer-dot">·</span> See docs/DEPLOY.md to go live
+  </footer>
+
+  <input type="file" id="csv-file-input" accept=".csv,text/csv" hidden>
+
+  <div id="modal-root"></div>
+
+  <!-- AI Assistant -->
+  <button type="button" id="assistant-fab" class="assistant-fab" title="AI helper" aria-label="Open AI helper" hidden>
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 3c-4.97 0-9 3.582-9 8 0 2.386 1.062 4.524 2.736 6.032L5 21l3.288-1.104C9.438 20.632 10.686 21 12 21c4.97 0 9-3.582 9-8s-4.03-8-9-8z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+      <circle cx="9" cy="11" r="1" fill="currentColor"/>
+      <circle cx="12" cy="11" r="1" fill="currentColor"/>
+      <circle cx="15" cy="11" r="1" fill="currentColor"/>
+    </svg>
+  </button>
+
+  <div id="assistant-panel" class="assistant-panel" hidden aria-label="AI helper chat">
+    <div class="assistant-header">
+      <div>
+        <h2 class="assistant-title">AI Helper</h2>
+        <p class="assistant-sub">Ask me to add events, tasks, holidays, bills &amp; more</p>
+      </div>
+      <div class="assistant-header-actions">
+        <button type="button" id="assistant-clear" class="assistant-icon-btn" title="New conversation" aria-label="New conversation">
+          <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.003 7.003 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.003 7.003 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
+        </button>
+        <button type="button" id="assistant-close" class="assistant-icon-btn" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div id="assistant-messages" class="assistant-messages"></div>
+    <form id="assistant-form" class="assistant-form">
+      <textarea id="assistant-input" rows="1" placeholder="e.g. Add dentist on Friday at 2pm…" autocomplete="off"></textarea>
+      <button type="submit" class="btn btn-primary assistant-send" aria-label="Send">
+        <svg viewBox="0 0 20 20" fill="currentColor"><path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z"/></svg>
+      </button>
+    </form>
+  </div>
+  <div id="assistant-backdrop" class="assistant-backdrop" hidden></div>
+
+  <div id="login-overlay" class="login-overlay" hidden>
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M16 4c-4 0-8 3-10 7-2 4-1 9 2 12 3 3 8 4 12 2 4-2 7-6 7-10 0-6-5-11-11-11z" stroke="currentColor" stroke-width="1.75"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/><circle cx="20" cy="14" r="1.5" fill="currentColor"/><path d="M13 19c1.5 1.5 4.5 1.5 6 0" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+        </div>
+        <h2>Family Portal</h2>
+        <p>Sign in to your household</p>
+      </div>
+      <form class="login-form" onsubmit="return false">
+        <label>Email<input type="email" placeholder="you@email.com" autocomplete="username"></label>
+        <label>Password<input type="password" placeholder="Password" autocomplete="current-password"></label>
+        <button type="button" class="btn btn-primary btn-block" id="login-demo">Sign in</button>
+        <p class="login-note">Use the email and password set up for your household.</p>
+      </form>
+      <button type="button" class="login-close wf-action" id="login-close" aria-label="Close preview">&times; Back to preview</button>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=10"></script>
+</body>
+</html>

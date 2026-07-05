@@ -1,0 +1,18 @@
+[Unit]
+Description=Family Portal (calendar, finances, holidays)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/family-portal
+Environment=PYTHONUNBUFFERED=1
+Environment=ENV=production
+EnvironmentFile=-/opt/family-portal/.env
+ExecStart=/opt/family-portal/venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8090
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Family Portal — single t3.micro EC2 + optional Elastic IP + SQLite on EBS.
+  Cheapest layout: no RDS, no ALB, no NAT gateway.
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH access
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the security group (default VPC recommended)
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t2.micro
+
+  AppPort:
+    Type: Number
+    Default: 8090
+    Description: Family Portal HTTP port
+
+  AllowedSshCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to SSH (restrict to your IP in production)
+
+  AllowedAppCidr:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to reach the portal
+
+  VolumeSizeGb:
+    Type: Number
+    Default: 8
+    MinValue: 8
+    MaxValue: 30
+
+  CreateElasticIp:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  UseElasticIp: !Equals [!Ref CreateElasticIp, "true"]
+
+Resources:
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Family Portal
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSshCidr
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          CidrIp: !Ref AllowedAppCidr
+          Description: Family Portal HTTP
+      Tags:
+        - Key: Name
+          Value: family-portal-sg
+
+  AppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id}}"
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref AppSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref VolumeSizeGb
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq python3 python3-venv python3-pip curl ufw git
+          mkdir -p /opt/family-portal/data
+          chown -R ubuntu:ubuntu /opt/family-portal
+          ufw allow OpenSSH >/dev/null 2>&1 || true
+          ufw allow ${AppPort}/tcp >/dev/null 2>&1 || true
+          echo "y" | ufw enable >/dev/null 2>&1 || true
+          echo "bootstrap complete" > /opt/family-portal/.bootstrap
+      Tags:
+        - Key: Name
+          Value: family-portal
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Condition: UseElasticIp
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: family-portal-eip
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Condition: UseElasticIp
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref AppInstance
+
+Outputs:
+  PublicIp:
+    Description: Public IP (Elastic IP if created, else instance IP)
+    Value: !If [UseElasticIp, !Ref ElasticIp, !GetAtt AppInstance.PublicIp]
+
+  InstanceId:
+    Description: EC2 instance ID
+    Value: !Ref AppInstance
+
+  PortalUrl:
+    Description: Open this after uploading app code and running install-ubuntu.sh
+    Value: !Sub
+      - "http://${Ip}:${Port}"
+      - Ip: !If [UseElasticIp, !Ref ElasticIp, !GetAtt AppInstance.PublicIp]
+        Port: !Ref AppPort
+
+  SshCommand:
+    Description: SSH into the server
+    Value: !Sub
+      - "ssh -i YOUR_KEY.pem ubuntu@${Ip}"
+      - Ip: !If [UseElasticIp, !Ref ElasticIp, !GetAtt AppInstance.PublicIp]
+
+  DatabaseNote:
+    Description: Database strategy
+    Value: SQLite at /opt/family-portal/data/family.db on EBS — no RDS cost

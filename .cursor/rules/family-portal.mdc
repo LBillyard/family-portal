@@ -1,0 +1,17 @@
+---
+description: Family Portal project conventions for AI agents
+alwaysApply: true
+---
+
+# Family Portal
+
+Read **AGENTS.md** at repo root before significant changes.
+
+- Stack: FastAPI + SQLite + vanilla JS on port **8090** — no frontend build step
+- Match navy/teal theme in `server/static/style.css`
+- SQL: parameterized queries only in `server/database.py`
+- API: protect routes with `require_user`; add schemas in `shared/schemas.py`
+- Never commit `.env`, `data/`, or secrets
+- Bump `?v=N` on static assets in `index.html` after JS/CSS edits
+- Integrations: add `is_configured()` + 503 when keys missing
+- Minimize diff scope; follow existing patterns in surrounding code

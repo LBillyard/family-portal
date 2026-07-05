@@ -1,0 +1,185 @@
+# Family Portal — Deployment Runbook
+
+**Status:** Infrastructure and scripts are ready. **Do not run deploy until you have reviewed security settings and changed default passwords.**
+
+This guide covers AWS EC2 deployment (cheapest layout) and manual Ubuntu install. The app listens on port **8090**.
+
+---
+
+## Pre-deploy checklist
+
+- [ ] Change default login passwords (or add password-change flow)
+- [ ] Generate `SECRET_KEY`: `python -c "import secrets; print(secrets.token_hex(32))"`
+- [ ] Create [Google OAuth credentials](https://console.cloud.google.com/apis/credentials) with redirect URI matching your public URL
+- [ ] Add `OPENROUTER_API_KEY` if using AI holiday ideas
+- [ ] Restrict SSH (`AllowedSshCidr`) to your home IP in CloudFormation parameters
+- [ ] Consider `-CreateElasticIp` so the public IP survives reboots
+
+---
+
+## Option A — AWS one-command deploy (Windows)
+
+Prerequisites: AWS CLI configured, EC2 key pair exists.
+
+```powershell
+cd "C:\Users\Luke\Desktop\Cursor Projects\The Family Portal"
+
+# Stack only (no code upload):
+.\deploy\aws\deploy.ps1 -KeyName "your-key-name" -SkipUpload
+
+# Full deploy with upload:
+.\deploy\aws\deploy.ps1 -KeyName "your-key-name" -KeyPath "C:\path\to\your-key.pem" -CreateElasticIp
+```
+
+Parameters:
+
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `-StackName` | `family-portal` | CloudFormation stack name |
+| `-Region` | `eu-west-2` | AWS region |
+| `-AppPort` | `8090` | Must match security group + app |
+| `-AllowedSshCidr` | `0.0.0.0/0` | **Restrict in production** |
+| `-AllowedAppCidr` | `0.0.0.0/0` | **Restrict in production** |
+
+After stack creation, note the **PortalUrl** output.
+
+### Post-deploy configuration
+
+SSH into the instance and edit `/opt/family-portal/.env`:
+
+```bash
+sudo nano /opt/family-portal/.env
+```
+
+Set at minimum:
+
+```env
+SECRET_KEY=your-generated-secret
+PUBLIC_URL=http://YOUR_ELASTIC_IP:8090
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://YOUR_ELASTIC_IP:8090/api/auth/google/callback
+OPENROUTER_API_KEY=...
+```
+
+Restart:
+
+```bash
+sudo systemctl restart family-portal
+sudo systemctl status family-portal
+journalctl -u family-portal -f
+```
+
+---
+
+## Option B — Manual upload to existing EC2
+
+```powershell
+scp -i YOUR_KEY.pem -r server shared deploy requirements.txt ubuntu@YOUR_IP:/tmp/family-upload/
+```
+
+On the server:
+
+```bash
+sudo mkdir -p /opt/family-portal
+sudo rsync -a /tmp/family-upload/ /opt/family-portal/
+sudo chown -R ubuntu:ubuntu /opt/family-portal
+sudo bash /opt/family-portal/deploy/install-ubuntu.sh
+```
+
+---
+
+## Option C — Any Ubuntu VPS (no AWS)
+
+1. Clone/copy project to `/opt/family-portal`
+2. Copy `.env.example` → `.env` and fill values
+3. Run `sudo bash deploy/install-ubuntu.sh`
+
+The install script:
+
+- Creates Python venv and installs `requirements.txt`
+- Generates `.env` with random `SECRET_KEY` if missing
+- Installs `family-portal.service` systemd unit
+- Opens port 8090 in ufw
+
+---
+
+## Architecture (AWS)
+
+```
+Internet
+    │
+    ▼
+┌─────────────────┐
+│  EC2 t3.micro   │  Ubuntu 24.04
+│  port 8090      │  FastAPI + uvicorn
+│                 │  SQLite → /opt/family-portal/data/family.db
+└─────────────────┘
+    │
+    └── EBS gp3 (8 GB default) — database persists on volume
+```
+
+No RDS, ALB, or NAT gateway — minimal monthly cost (~$8–10/mo after free tier in eu-west-2).
+
+Optional: attach Elastic IP for stable DNS/OAuth redirect URIs.
+
+---
+
+## HTTPS (recommended before production)
+
+The app serves plain HTTP. For HTTPS:
+
+1. Point a domain A record to your Elastic IP
+2. Install Caddy or nginx as reverse proxy on the same instance
+3. Update `PUBLIC_URL` and `GOOGLE_REDIRECT_URI` to `https://your.domain`
+4. Open ports 80/443 in security group instead of (or in addition to) 8090
+
+Example Caddy snippet (not included in repo):
+
+```
+your.domain {
+    reverse_proxy localhost:8090
+}
+```
+
+---
+
+## Backup
+
+SQLite database:
+
+```bash
+sudo cp /opt/family-portal/data/family.db /opt/family-portal/data/family.db.bak.$(date +%F)
+```
+
+For automated backups, cron + `aws s3 cp` to a private S3 bucket is sufficient for a two-user household app.
+
+---
+
+## Rollback
+
+```powershell
+aws cloudformation delete-stack --stack-name family-portal --region eu-west-2
+```
+
+This terminates the EC2 instance and releases the Elastic IP (if created). **Back up `family.db` first.**
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| 502 / connection refused | `journalctl -u family-portal -n 50` |
+| Google OAuth redirect mismatch | `GOOGLE_REDIRECT_URI` must exactly match Google Console |
+| AI generate fails | Check `OPENROUTER_API_KEY`; verify model name |
+| CSV import 400 | Ensure CSV has date + description + amount columns |
+| Session lost on restart | Set stable `SECRET_KEY` in `.env` |
+
+---
+
+## What was intentionally not deployed
+
+Per project scope, **no AWS resources were created** during the build phase. All deploy artifacts live in `deploy/` for you to run when ready.
+
+See also: [BUILD.md](./BUILD.md) for architecture and API details.
