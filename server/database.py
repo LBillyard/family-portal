@@ -464,8 +464,8 @@ def _seed(conn: sqlite3.Connection) -> None:
     from server.auth import hash_password
 
     users = [
-        ("luke", "luke@example.com", "Luke", "#00a89e"),
-        ("partner", "partner@example.com", "Partner", "#243a5e"),
+        ("luke", "lbillyard@gmail.com", "Luke", "#00a89e"),
+        ("partner", "lebillyard@gmail.com", "Laura", "#243a5e"),
     ]
     pw = hash_password("family123")
     now = _utcnow()

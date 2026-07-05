@@ -118,7 +118,7 @@ const MODALS = {
       { label: 'Title', type: 'text', placeholder: 'e.g. Date night' },
       { label: 'Date', type: 'date', value: '' },
       { label: 'Time', type: 'time', value: '19:00' },
-      { label: 'Assigned to', type: 'select', options: ['Luke', 'Partner', 'Both'] },
+      { label: 'Assigned to', type: 'select', options: ['Luke', 'Laura', 'Both'] },
       { label: 'Location', type: 'text', value: '' },
     ],
   },
@@ -159,7 +159,7 @@ const MODALS = {
     desc: 'Household to-do assigned to one or both of you.',
     fields: [
       { label: 'Task', type: 'text', placeholder: 'e.g. Book airport parking' },
-      { label: 'Assign to', type: 'select', options: ['Luke', 'Partner', 'Either'] },
+      { label: 'Assign to', type: 'select', options: ['Luke', 'Laura', 'Either'] },
       { label: 'Due date', type: 'date', value: '2026-07-10' },
       { label: 'Priority', type: 'select', options: ['High', 'Medium', 'Low'] },
     ],
@@ -178,7 +178,7 @@ const MODALS = {
     title: 'Connect Google Calendar',
     desc: 'OAuth sign-in — read and write events per person.',
     fields: [
-      { label: 'Account', type: 'select', options: ['Luke@gmail.com', 'Partner@gmail.com'] },
+      { label: 'Account', type: 'select', options: ['Luke', 'Laura'] },
     ],
   },
   'holiday-ai': {
@@ -312,7 +312,7 @@ async function submitModal(key) {
           title: f['Title'],
           start,
           end: start,
-          user_id: assignee.includes('partner') ? 'partner' : assignee.includes('both') ? 'luke' : 'luke',
+          user_id: assignee.includes('laura') ? 'partner' : 'luke',
           location: f['Location'] || null,
         }),
       });
@@ -357,7 +357,7 @@ async function submitModal(key) {
         method: 'POST',
         body: JSON.stringify({
           title: f['Task'],
-          assignee_id: assignee.includes('partner') ? 'partner' : 'luke',
+          assignee_id: assignee.includes('laura') ? 'partner' : 'luke',
           due: f['Due date'] || null,
           priority: (f['Priority'] || 'medium').toLowerCase(),
         }),
@@ -735,12 +735,15 @@ function switchTab(tabId) {
 }
 
 function renderMembers(users) {
-  document.getElementById('member-chips').innerHTML = users
-    .map(
-      (u) =>
-        `<span class="member-chip"><span class="member-dot" style="background:${esc(u.colour)}"></span>${esc(u.name)}${u.google_connected ? ' · Google ✓' : ''}</span>`
-    )
-    .join('');
+  const chips = document.getElementById('member-chips');
+  if (chips) {
+    chips.innerHTML = users
+      .map(
+        (u) =>
+          `<span class="member-chip"><span class="member-dot" style="background:${esc(u.colour)}"></span>${esc(u.name)}${u.google_connected ? ' · Google ✓' : ''}</span>`
+      )
+      .join('');
+  }
 
   document.getElementById('cal-filters').innerHTML = users
     .map(
@@ -754,7 +757,7 @@ function renderWelcome(data) {
   const h = data.next_holiday;
   document.getElementById('welcome-hero').innerHTML = `
     <div>
-      <h2>${fmt.greeting()}, Luke & Partner</h2>
+      <h2>${fmt.greeting()}, ${(data.users || []).map((u) => esc(u.name)).join(' & ') || 'household'}</h2>
       <p>${fmt.todayLabel()} · ${data.upcoming_events.length} events this week · ${data.notifications_unread} notifications</p>
     </div>
     <div class="welcome-meta">
