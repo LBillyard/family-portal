@@ -21,6 +21,17 @@ if [[ ! -f "$APP_DIR/server/main.py" ]]; then
   exit 1
 fi
 
+echo "==> Ensuring swap (safety net for 1 GB RAM instances like t4g.micro)..."
+if ! swapon --show 2>/dev/null | grep -q '/swapfile'; then
+  if [[ ! -f /swapfile ]]; then
+    fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null
+  fi
+  swapon /swapfile || true
+  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
 echo "==> Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip curl ufw

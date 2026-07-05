@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Family Portal — single t3.micro EC2 + optional Elastic IP + SQLite on EBS.
+  Family Portal — single t4g.micro (ARM/Graviton) EC2 + optional Elastic IP + SQLite on EBS.
   Cheapest layout: no RDS, no ALB, no NAT gateway.
 
 Parameters:
@@ -14,10 +14,12 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: t3.micro
+    Default: t4g.micro
+    Description: ARM/Graviton burstable. All values require the arm64 AMI below.
     AllowedValues:
-      - t3.micro
-      - t2.micro
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
 
   AppPort:
     Type: Number
@@ -74,7 +76,7 @@ Resources:
   AppInstance:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id}}"
+      ImageId: !Sub "{{resolve:ssm:/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id}}"
       InstanceType: !Ref InstanceType
       KeyName: !Ref KeyName
       SecurityGroupIds:

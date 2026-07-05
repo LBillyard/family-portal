@@ -63,12 +63,45 @@ class AppointmentCreate(BaseModel):
     reminder_days: int = 2
 
 
+class AppointmentUpdate(BaseModel):
+    title: Optional[str] = None
+    provider: Optional[str] = None
+    datetime: Optional[str] = None
+    user_id: Optional[str] = None
+    category: Optional[str] = None
+    location: Optional[str] = None
+    reminder_days: Optional[int] = None
+    status: Optional[Literal["upcoming", "completed", "cancelled"]] = None
+
+
 class TripCreate(BaseModel):
     title: str
     status: Literal["idea", "planning", "booked"] = "idea"
     start: Optional[str] = None
     end: Optional[str] = None
     budget: float = 0
+
+
+class TripUpdate(BaseModel):
+    title: Optional[str] = None
+    status: Optional[Literal["idea", "planning", "booked"]] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    budget: Optional[float] = None
+    spent: Optional[float] = None
+
+
+class MemberUpdate(BaseModel):
+    name: Optional[str] = None
+    colour: Optional[str] = None
+
+
+class TransferCreate(BaseModel):
+    from_account: str
+    to_account: str
+    amount: float = Field(gt=0)
+    date: Optional[str] = None
+    note: Optional[str] = None
 
 
 class DocumentCreate(BaseModel):

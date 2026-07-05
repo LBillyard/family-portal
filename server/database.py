@@ -624,6 +624,25 @@ def user_public(u: dict) -> dict:
     }
 
 
+def update_user(user_id: str, data: dict) -> Optional[dict]:
+    fields = []
+    values = []
+    if data.get("name"):
+        fields.append("name = ?")
+        values.append(data["name"].strip())
+    if data.get("colour"):
+        fields.append("colour = ?")
+        values.append(data["colour"])
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone():
+            return None
+        if fields:
+            values.append(user_id)
+            conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return user_public(row_to_dict(row))
+
+
 # --- Events ---
 
 def list_events() -> list[dict]:
@@ -883,6 +902,32 @@ def create_appointment(data: dict, default_user: str) -> dict:
         return _appt_out(row_to_dict(row))
 
 
+def update_appointment(appt_id: str, data: dict) -> Optional[dict]:
+    fields = []
+    values = []
+    for key in ("title", "provider", "datetime", "user_id", "category", "location", "status"):
+        if data.get(key) is not None:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if data.get("reminder_days") is not None:
+        fields.append("reminder_days = ?")
+        values.append(int(data["reminder_days"]))
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM appointments WHERE id = ?", (appt_id,)).fetchone():
+            return None
+        if fields:
+            values.append(appt_id)
+            conn.execute(f"UPDATE appointments SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM appointments WHERE id = ?", (appt_id,)).fetchone()
+        return _appt_out(row_to_dict(row))
+
+
+def delete_appointment(appt_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM appointments WHERE id = ?", (appt_id,))
+        return cur.rowcount > 0
+
+
 def _appt_out(r: dict) -> dict:
     return {
         "id": r["id"],
@@ -958,6 +1003,30 @@ def create_trip(data: dict) -> dict:
         )
     trips = list_trips()
     return next(t for t in trips if t["id"] == tid)
+
+
+def update_trip(trip_id: str, data: dict) -> Optional[dict]:
+    colmap = {
+        "title": "title",
+        "status": "status",
+        "start": "start_date",
+        "end": "end_date",
+        "budget": "budget",
+        "spent": "spent",
+    }
+    fields = []
+    values = []
+    for key, col in colmap.items():
+        if data.get(key) is not None:
+            fields.append(f"{col} = ?")
+            values.append(data[key])
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM holiday_trips WHERE id = ?", (trip_id,)).fetchone():
+            return None
+        if fields:
+            values.append(trip_id)
+            conn.execute(f"UPDATE holiday_trips SET {', '.join(fields)} WHERE id = ?", values)
+    return next((t for t in list_trips() if t["id"] == trip_id), None)
 
 
 def list_holiday_ideas() -> list[dict]:

@@ -10,7 +10,7 @@ WorkingDirectory=/opt/family-portal
 Environment=PYTHONUNBUFFERED=1
 Environment=ENV=production
 EnvironmentFile=-/opt/family-portal/.env
-ExecStart=/opt/family-portal/venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8090
+ExecStart=/opt/family-portal/venv/bin/uvicorn server.main:app --host 0.0.0.0 --port 8090
 Restart=always
 RestartSec=5
 

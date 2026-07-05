@@ -111,17 +111,28 @@ Internet
     │
     ▼
 ┌─────────────────┐
-│  EC2 t3.micro   │  Ubuntu 24.04
-│  port 8090      │  FastAPI + uvicorn
-│                 │  SQLite → /opt/family-portal/data/family.db
+│ EC2 t4g.micro   │  Ubuntu 24.04 (arm64 / Graviton)
+│ 1 GB RAM + 2 GB │  FastAPI + uvicorn
+│ swap, port 8090 │  SQLite → /opt/family-portal/data/family.db
 └─────────────────┘
     │
     └── EBS gp3 (8 GB default) — database persists on volume
 ```
 
-No RDS, ALB, or NAT gateway — minimal monthly cost (~$8–10/mo after free tier in eu-west-2).
+No RDS, ALB, or NAT gateway. **ARM/Graviton (`t4g`) is ~30–40% cheaper than the equivalent Intel `t3` for identical capacity** — all Python deps ship arm64 wheels, so nothing else changes.
 
-Optional: attach Elastic IP for stable DNS/OAuth redirect URIs.
+Approx. monthly cost in eu-west-2 (excl. UK VAT):
+
+| Item | Cost |
+|------|------|
+| t4g.micro compute (on-demand) | ~$6.15/mo |
+| Public IPv4 address (mandatory since Feb 2024, $0.005/hr) | ~$3.65/mo |
+| EBS gp3 8 GB | ~$0.70/mo |
+| **Total** | **~$10.5/mo** (+ 20% UK VAT ≈ ~$13/mo) |
+
+`install-ubuntu.sh` adds a 2 GB swap file so concurrent 10 MB receipt/media uploads can't OOM the 1 GB box. Size down to `t4g.nano` (0.5 GB, ~$3/mo compute) if you want it cheaper — swap makes that viable for 2 users, with less headroom.
+
+Optional: attach Elastic IP for a stable IP/OAuth redirect (same $3.65/mo IPv4 charge, not additional).
 
 ---
 

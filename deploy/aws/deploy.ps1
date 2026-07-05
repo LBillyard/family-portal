@@ -11,7 +11,7 @@ param(
 
     [string]$StackName = "family-portal",
     [string]$Region = "eu-west-2",
-    [string]$InstanceType = "t3.micro",
+    [string]$InstanceType = "t4g.micro",
     [int]$AppPort = 8090,
     [string]$AllowedSshCidr = "0.0.0.0/0",
     [string]$AllowedAppCidr = "0.0.0.0/0",

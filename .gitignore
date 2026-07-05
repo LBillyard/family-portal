@@ -8,3 +8,5 @@ data/uploads/
 *.db
 .DS_Store
 cookies.txt
+.playwright-mcp/
+*.pem

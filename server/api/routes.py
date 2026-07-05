@@ -7,7 +7,7 @@ from urllib.parse import quote
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from server import auth, database as db
@@ -18,6 +18,7 @@ from server.services import finance_merge, notifications as notify_svc, receipts
 from server.services import search as search_svc, trips as trips_svc
 from shared.schemas import (
     AppointmentCreate,
+    AppointmentUpdate,
     AssistantChatRequest,
     BillCreate,
     DocumentCreate,
@@ -27,13 +28,16 @@ from shared.schemas import (
     MaintenanceCreate,
     MaintenanceUpdate,
     MediaUpdate,
+    MemberUpdate,
     SearchQuery,
     SubscriptionUpdate,
     TaskCreate,
     TaskUpdate,
     TransactionCreate,
+    TransferCreate,
     TripCreate,
     TripPackingRequest,
+    TripUpdate,
 )
 
 router = APIRouter(prefix="/api")
@@ -348,6 +352,41 @@ async def import_csv(
     return {"imported": count}
 
 
+@router.post("/finances/transfer")
+def transfer_funds(body: TransferCreate, user: dict = Depends(require_user)):
+    accounts = {a["id"]: a for a in db.list_accounts()}
+    names = {a["name"]: a["id"] for a in db.list_accounts()}
+    src = body.from_account if body.from_account in accounts else names.get(body.from_account)
+    dst = body.to_account if body.to_account in accounts else names.get(body.to_account)
+    if not src or not dst:
+        raise HTTPException(status_code=400, detail="Unknown account")
+    if src == dst:
+        raise HTTPException(status_code=400, detail="Choose two different accounts")
+    amount = abs(body.amount)
+    note = body.note or "Transfer"
+    db.create_transaction({"description": f"{note} → {accounts[dst]['name']}", "amount": -amount, "category": "Transfer", "account_id": src, "date": body.date})
+    db.create_transaction({"description": f"{note} ← {accounts[src]['name']}", "amount": amount, "category": "Transfer", "account_id": dst, "date": body.date})
+    activity_svc.log(user, "created", "transaction", f"Transfer £{amount:.2f}: {accounts[src]['name']} → {accounts[dst]['name']}")
+    return {"ok": True, "from": accounts[src]["name"], "to": accounts[dst]["name"], "amount": amount}
+
+
+@router.get("/finances/export")
+def export_transactions(_: dict = Depends(require_user)):
+    import csv as _csv
+    import io as _io
+
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(["Date", "Description", "Category", "Account", "Amount"])
+    for t in db.list_transactions(limit=100000):
+        writer.writerow([t["date"], t["description"], t["category"], t["account"], f"{t['amount']:.2f}"])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="transactions.csv"'},
+    )
+
+
 # --- Subscriptions ---
 
 @router.get("/subscriptions")
@@ -387,6 +426,59 @@ def create_appointment(body: AppointmentCreate, user: dict = Depends(require_use
     return db.create_appointment(body.model_dump(), user["id"])
 
 
+@router.patch("/appointments/{appt_id}")
+def update_appointment(appt_id: str, body: AppointmentUpdate, user: dict = Depends(require_user)):
+    appt = db.update_appointment(appt_id, body.model_dump(exclude_unset=True))
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    activity_svc.log(user, "updated", "appointment", f"Updated appointment: {appt['title']}", entity_id=appt_id)
+    return appt
+
+
+@router.delete("/appointments/{appt_id}")
+def delete_appointment(appt_id: str, user: dict = Depends(require_user)):
+    existing = {a["id"]: a for a in db.list_appointments()}
+    if appt_id not in existing:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    db.delete_appointment(appt_id)
+    activity_svc.log(user, "deleted", "appointment", f"Removed appointment: {existing[appt_id]['title']}", entity_id=appt_id)
+    return {"ok": True}
+
+
+@router.post("/appointments/sync-calendar")
+def sync_appointments_to_calendar(user: dict = Depends(require_user)):
+    from datetime import date as _date
+
+    today = _date.today().isoformat()
+    existing = {(e["user_id"], e["title"], (e.get("start") or "")[:16]) for e in db.list_events()}
+    created = 0
+    for a in db.list_appointments():
+        if a["status"] != "upcoming" or (a.get("datetime") or "")[:10] < today:
+            continue
+        title = f"{a['title']} — {a['provider']}"
+        if (a["user_id"], title, (a.get("datetime") or "")[:16]) in existing:
+            continue
+        event = db.create_event(
+            {
+                "title": title,
+                "start": a["datetime"],
+                "end": a["datetime"],
+                "all_day": False,
+                "location": a.get("location"),
+                "user_id": a["user_id"],
+            },
+            user["id"],
+        )
+        if google_calendar.is_configured():
+            try:
+                google_calendar.push_event_to_google(a["user_id"], event)
+            except Exception:
+                pass
+        created += 1
+    activity_svc.log(user, "synced", "appointment", f"Synced {created} appointment(s) to calendar")
+    return {"created": created}
+
+
 # --- Holidays & AI ---
 
 @router.get("/holidays")
@@ -397,6 +489,15 @@ def api_holidays(_: dict = Depends(require_user)):
 @router.post("/holidays/trips")
 def create_trip(body: TripCreate, _: dict = Depends(require_user)):
     return db.create_trip(body.model_dump())
+
+
+@router.patch("/holidays/trips/{trip_id}")
+def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(require_user)):
+    trip = db.update_trip(trip_id, body.model_dump(exclude_unset=True))
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    activity_svc.log(user, "updated", "trip", f"Updated trip: {trip['title']}", entity_id=trip_id)
+    return trip
 
 
 @router.post("/holidays/ideas/generate")
@@ -791,6 +892,15 @@ def remove_media(media_id: str, _: dict = Depends(require_user)):
     if disk.is_file():
         disk.unlink()
     return {"ok": True}
+
+
+@router.patch("/members/{user_id}")
+def update_member(user_id: str, body: MemberUpdate, actor: dict = Depends(require_user)):
+    member = db.update_user(user_id, body.model_dump(exclude_unset=True))
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+    activity_svc.log(actor, "updated", "member", f"Updated member: {member['name']}", entity_id=user_id)
+    return member
 
 
 @router.get("/settings")

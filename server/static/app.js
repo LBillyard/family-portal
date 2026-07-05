@@ -27,6 +27,9 @@ const DOC_CATEGORY_LABELS = {
 
 let vaultFilter = 'all';
 let mediaFilter = 'all';
+let tripFilter = 'all';
+let calView = 'month';
+let calCursor = null;
 let activeModalKey = null;
 
 async function api(path, options = {}) {
@@ -112,8 +115,8 @@ const MODALS = {
     title: 'Add event',
     desc: 'Creates a portal event and optionally syncs to Google Calendar.',
     fields: [
-      { label: 'Title', type: 'text', value: 'Date night' },
-      { label: 'Date', type: 'date', value: '2026-07-11' },
+      { label: 'Title', type: 'text', placeholder: 'e.g. Date night' },
+      { label: 'Date', type: 'date', value: '' },
       { label: 'Time', type: 'time', value: '19:00' },
       { label: 'Assigned to', type: 'select', options: ['Luke', 'Partner', 'Both'] },
       { label: 'Location', type: 'text', value: '' },
@@ -123,8 +126,8 @@ const MODALS = {
     title: 'Log transaction',
     desc: 'Manual income or expense entry.',
     fields: [
-      { label: 'Description', type: 'text', value: 'Weekly shop' },
-      { label: 'Amount (£)', type: 'number', value: '45.00' },
+      { label: 'Description', type: 'text', placeholder: 'e.g. Weekly shop' },
+      { label: 'Amount (£)', type: 'number', value: '' },
       { label: 'Category', type: 'select', options: ['Groceries', 'Transport', 'Eating out', 'Income'] },
       { label: 'Account', type: 'select', options: ['Joint current', 'Luke personal', 'Partner personal'] },
       { label: 'Date', type: 'date', value: '2026-07-05' },
@@ -134,9 +137,9 @@ const MODALS = {
     title: 'Add recurring bill',
     desc: 'Track monthly or annual payments.',
     fields: [
-      { label: 'Bill name', type: 'text', value: 'Spotify' },
-      { label: 'Amount (£)', type: 'number', value: '11.99' },
-      { label: 'Due day of month', type: 'number', value: '15' },
+      { label: 'Bill name', type: 'text', placeholder: 'e.g. Spotify' },
+      { label: 'Amount (£)', type: 'number', value: '' },
+      { label: 'Due day of month', type: 'number', value: '1' },
       { label: 'Category', type: 'select', options: ['Utilities', 'Subscriptions', 'Housing', 'Transport'] },
     ],
   },
@@ -144,9 +147,9 @@ const MODALS = {
     title: 'New appointment',
     desc: 'Health, dental, car MOT, vet — with optional calendar sync.',
     fields: [
-      { label: 'Title', type: 'text', value: 'GP appointment' },
-      { label: 'Provider', type: 'text', value: 'Oakwood Medical' },
-      { label: 'Date & time', type: 'datetime-local', value: '2026-07-14T10:30' },
+      { label: 'Title', type: 'text', placeholder: 'e.g. GP appointment' },
+      { label: 'Provider', type: 'text', placeholder: 'e.g. Oakwood Medical' },
+      { label: 'Date & time', type: 'datetime-local', value: '' },
       { label: 'Category', type: 'select', options: ['Health', 'Dental', 'Car', 'Vet'] },
       { label: 'Remind me (days before)', type: 'number', value: '2' },
     ],
@@ -155,7 +158,7 @@ const MODALS = {
     title: 'Add shared task',
     desc: 'Household to-do assigned to one or both of you.',
     fields: [
-      { label: 'Task', type: 'text', value: 'Book airport parking' },
+      { label: 'Task', type: 'text', placeholder: 'e.g. Book airport parking' },
       { label: 'Assign to', type: 'select', options: ['Luke', 'Partner', 'Either'] },
       { label: 'Due date', type: 'date', value: '2026-07-10' },
       { label: 'Priority', type: 'select', options: ['High', 'Medium', 'Low'] },
@@ -165,7 +168,7 @@ const MODALS = {
     title: 'New holiday trip',
     desc: 'Start from scratch or promote a saved AI idea.',
     fields: [
-      { label: 'Trip name', type: 'text', value: 'Summer city break' },
+      { label: 'Trip name', type: 'text', placeholder: 'e.g. Summer city break' },
       { label: 'Status', type: 'select', options: ['Idea', 'Planning', 'Booked'] },
       { label: 'Start date', type: 'date', value: '' },
       { label: 'Budget (£)', type: 'number', value: '800' },
@@ -203,42 +206,15 @@ const MODALS = {
   },
 };
 
+// Actions still awaiting a real implementation — trimmed batch by batch.
 const ACTION_MSG = {
-  search: 'Global search — events, bills, appointments, trips',
-  'open-settings': 'Opening settings…',
-  'sync-calendar': 'Pulling latest events from Google Calendar',
-  'sync-appointments': 'Adding appointments to shared calendar',
-  transfer: 'Transfer between accounts',
-  'export-transactions': 'Export CSV for July 2026',
-  'add-document': 'Document vault — passports, insurance, MOT',
-  'compare-trips': 'Side-by-side trip comparison view',
-  'filter-all-trips': 'Showing all trips',
-  'filter-booked': 'Filter: booked trips only',
-  'filter-planning': 'Filter: planning stage',
-  'filter-ideas': 'Filter: ideas only',
-  'cal-prev': 'Previous month',
-  'cal-next': 'Next month',
-  'cal-today': 'Jump to today',
-  'cal-view-month': 'Month view',
-  'cal-view-week': 'Week view',
-  'cal-view-agenda': 'Agenda view',
-  'save-idea': 'Saved to holiday wishlist ✓',
-  'view-trip': 'Trip detail — checklist, bookings, budget',
-  'edit-trip': 'Edit trip — dates, budget, checklist',
-  'edit-member': 'Edit member — name, colour, Google account',
-  'view-booking': 'Open booking confirmation link',
-  'edit-appointment': 'Edit appointment details',
-  'preview-login': 'Login screen — household PIN or per-user password',
-  'toggle-task': 'Task marked complete',
+  transfer: 'Transfer between accounts — coming next',
+  'export-transactions': 'CSV export — coming next',
+  'sync-appointments': 'Appointment → calendar sync — coming next',
+  'compare-trips': 'Trip comparison — coming next',
+  'edit-trip': 'Edit trip — coming next',
+  'edit-member': 'Edit member — coming next',
 };
-
-const SEARCH_RESULTS = [
-  { type: 'Appointment', label: 'Dentist — check-up', meta: '8 Jul · Smile Dental', tab: 'appointments' },
-  { type: 'Event', label: 'Date night', meta: '11 Jul · The Ivy', tab: 'calendar' },
-  { type: 'Bill', label: 'Council tax', meta: '£186 · due 15th', tab: 'finances' },
-  { type: 'Trip', label: 'Algarve, Portugal', meta: '15–22 Aug · booked', tab: 'holidays' },
-  { type: 'Task', label: 'Book Portugal airport parking', meta: 'Due 10 Jul · Luke', tab: 'home' },
-];
 
 function showToast(msg, isError = false) {
   document.querySelectorAll('.toast').forEach((t) => t.remove());
@@ -273,7 +249,7 @@ function openModal(key) {
       if (f.type === 'textarea') {
         return `<label>${f.label}<textarea rows="3">${f.value || ''}</textarea></label>`;
       }
-      return `<label>${f.label}<input type="${f.type}" value="${f.value || ''}"></label>`;
+      return `<label>${f.label}<input type="${f.type}" value="${f.value || ''}" placeholder="${f.placeholder || ''}"></label>`;
     })
     .join('');
 
@@ -297,6 +273,16 @@ function openModal(key) {
   document.getElementById('modal-backdrop').onclick = closeModal;
   document.getElementById('modal-cancel').onclick = closeModal;
   document.getElementById('modal-save').onclick = () => submitModal(key);
+
+  // Drive the account picker from real accounts so IDs always resolve
+  if (key === 'log-expense') {
+    const accountLabel = [...document.querySelectorAll('.wf-modal label')].find((l) => l.textContent.trim().startsWith('Account'));
+    const sel = accountLabel?.querySelector('select');
+    const accounts = (store.finances?.accounts || []).filter((a) => a.type === 'current' || a.type === 'savings');
+    if (sel && accounts.length) {
+      sel.innerHTML = accounts.map((a) => `<option>${esc(a.name)}</option>`).join('');
+    }
+  }
 }
 
 function readModalFields() {
@@ -331,14 +317,16 @@ async function submitModal(key) {
         }),
       });
     } else if (key === 'log-expense') {
-      const acctMap = { 'Joint current': 'joint', 'Luke personal': 'luke_acct', 'Partner personal': 'partner' };
+      const accounts = store.finances?.accounts || [];
+      const byName = Object.fromEntries(accounts.map((a) => [a.name, a.id]));
+      const fallback = accounts.find((a) => a.type === 'current')?.id || accounts[0]?.id;
       await api('/transactions', {
         method: 'POST',
         body: JSON.stringify({
           description: f['Description'],
           amount: parseFloat(f['Amount (£)'] || f['Amount'] || 0),
           category: f['Category'],
-          account_id: acctMap[f['Account']] || 'joint',
+          account_id: byName[f['Account']] || fallback,
           date: f['Date'] || undefined,
         }),
       });
@@ -494,6 +482,216 @@ async function uploadCsv(file) {
   return res.json();
 }
 
+function openTransferModal() {
+  const accounts = store.finances?.accounts || [];
+  if (accounts.length < 2) {
+    showToast('Need at least two accounts to transfer', true);
+    return;
+  }
+  const opts = (selId) => accounts.map((a) => `<option value="${a.id}"${a.id === selId ? ' selected' : ''}>${esc(a.name)}</option>`).join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Transfer between accounts</h3><p>Logs a paired debit and credit and updates balances.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>From</span><select id="tr-from">${opts(accounts[0].id)}</select></label>
+        <label class="field field-full"><span>To</span><select id="tr-to">${opts(accounts[1].id)}</select></label>
+        <label class="field field-full"><span>Amount (£)</span><input type="number" id="tr-amount" min="0.01" step="0.01" value="50"></label>
+        <label class="field field-full"><span>Note</span><input type="text" id="tr-note" value="Transfer"></label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="tr-save">Transfer</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('tr-save').onclick = async () => {
+    const from_account = document.getElementById('tr-from').value;
+    const to_account = document.getElementById('tr-to').value;
+    const amount = parseFloat(document.getElementById('tr-amount').value);
+    const note = document.getElementById('tr-note').value.trim();
+    if (!amount || amount <= 0) return showToast('Enter an amount', true);
+    if (from_account === to_account) return showToast('Choose two different accounts', true);
+    try {
+      const r = await api('/finances/transfer', { method: 'POST', body: JSON.stringify({ from_account, to_account, amount, note }) });
+      closeModal();
+      showToast(`Transferred ${fmt.gbp(r.amount)}: ${r.from} → ${r.to}`);
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
+function openEditAppointmentModal(apptId) {
+  const appt = (store.appointments?.appointments || []).find((a) => a.id === apptId);
+  if (!appt) return showToast('Appointment not found', true);
+  const users = store.appointments?.users || [];
+  const userOpts = users.map((u) => `<option value="${u.id}"${u.id === appt.user_id ? ' selected' : ''}>${esc(u.name)}</option>`).join('');
+  const catOpts = ['health', 'dental', 'car', 'vet', 'other'].map((c) => `<option value="${c}"${c === appt.category ? ' selected' : ''}>${c}</option>`).join('');
+  const statusOpts = ['upcoming', 'completed', 'cancelled'].map((s) => `<option value="${s}"${s === appt.status ? ' selected' : ''}>${s}</option>`).join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Edit appointment</h3><p>Update details, reassign, or change status.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Title</span><input type="text" id="ea-title" value="${esc(appt.title)}"></label>
+        <label class="field field-full"><span>Provider</span><input type="text" id="ea-provider" value="${esc(appt.provider)}"></label>
+        <label class="field field-full"><span>Date &amp; time</span><input type="datetime-local" id="ea-dt" value="${(appt.datetime || '').slice(0, 16)}"></label>
+        <label class="field field-full"><span>Location</span><input type="text" id="ea-location" value="${esc(appt.location || '')}"></label>
+        <label class="field field-full"><span>Person</span><select id="ea-user">${userOpts}</select></label>
+        <label class="field field-full"><span>Category</span><select id="ea-cat">${catOpts}</select></label>
+        <label class="field field-full"><span>Status</span><select id="ea-status">${statusOpts}</select></label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-ghost" id="ea-delete" style="margin-right:auto">Delete</button>
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="ea-save">Save</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('ea-save').onclick = async () => {
+    try {
+      await api(`/appointments/${apptId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: document.getElementById('ea-title').value.trim(),
+          provider: document.getElementById('ea-provider').value.trim(),
+          datetime: document.getElementById('ea-dt').value,
+          location: document.getElementById('ea-location').value.trim(),
+          user_id: document.getElementById('ea-user').value,
+          category: document.getElementById('ea-cat').value,
+          status: document.getElementById('ea-status').value,
+        }),
+      });
+      closeModal();
+      showToast('Appointment updated');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+  document.getElementById('ea-delete').onclick = async () => {
+    if (!confirm('Delete this appointment?')) return;
+    try {
+      await api(`/appointments/${apptId}`, { method: 'DELETE' });
+      closeModal();
+      showToast('Appointment deleted');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
+function openEditTripModal(tripId) {
+  const trip = (store.holidays?.trips || []).find((t) => t.id === tripId);
+  if (!trip) return showToast('Trip not found', true);
+  const statusOpts = ['idea', 'planning', 'booked'].map((s) => `<option value="${s}"${s === trip.status ? ' selected' : ''}>${s}</option>`).join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Edit trip</h3><p>Update dates, status and budget.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Title</span><input type="text" id="et-title" value="${esc(trip.title)}"></label>
+        <label class="field field-full"><span>Status</span><select id="et-status">${statusOpts}</select></label>
+        <label class="field field-full"><span>Start date</span><input type="date" id="et-start" value="${(trip.start || '').slice(0, 10)}"></label>
+        <label class="field field-full"><span>End date</span><input type="date" id="et-end" value="${(trip.end || '').slice(0, 10)}"></label>
+        <label class="field field-full"><span>Budget (£)</span><input type="number" id="et-budget" min="0" step="1" value="${trip.budget || 0}"></label>
+        <label class="field field-full"><span>Spent (£)</span><input type="number" id="et-spent" min="0" step="1" value="${trip.spent || 0}"></label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="et-save">Save</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('et-save').onclick = async () => {
+    try {
+      await api(`/holidays/trips/${tripId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: document.getElementById('et-title').value.trim(),
+          status: document.getElementById('et-status').value,
+          start: document.getElementById('et-start').value || null,
+          end: document.getElementById('et-end').value || null,
+          budget: parseFloat(document.getElementById('et-budget').value) || 0,
+          spent: parseFloat(document.getElementById('et-spent').value) || 0,
+        }),
+      });
+      closeModal();
+      showToast('Trip updated');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
+function openEditMemberModal(userId) {
+  const users = store.settings?.users || store.dashboard?.users || [];
+  const user = users.find((u) => u.id === userId);
+  if (!user) return showToast('Member not found', true);
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Edit ${esc(user.name)}</h3><p>Name and colour label used across the app.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Name</span><input type="text" id="em-name" value="${esc(user.name)}"></label>
+        <label class="field field-full"><span>Colour</span><input type="color" id="em-colour" value="${user.colour || '#00a89e'}"></label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="em-save">Save</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('em-save').onclick = async () => {
+    try {
+      await api(`/members/${userId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: document.getElementById('em-name').value.trim(),
+          colour: document.getElementById('em-colour').value,
+        }),
+      });
+      closeModal();
+      showToast('Member updated');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
+function openCompareTripsModal() {
+  const trips = store.holidays?.trips || [];
+  if (!trips.length) return showToast('No trips to compare', true);
+  const row = (label, fn) => `<tr><th style="text-align:left">${label}</th>${trips.map((t) => `<td>${fn(t)}</td>`).join('')}</tr>`;
+  const table = `
+    <table class="data-table">
+      <thead><tr><th></th>${trips.map((t) => `<th>${esc(t.title)}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${row('Status', (t) => `<span class="status-tag ${t.status}">${t.status}</span>`)}
+        ${row('Dates', (t) => (t.start ? `${fmt.date(t.start)} → ${fmt.date(t.end)}` : 'TBC'))}
+        ${row('Budget', (t) => fmt.gbp(t.budget))}
+        ${row('Spent', (t) => fmt.gbp(t.spent))}
+        ${row('Remaining', (t) => fmt.gbp((t.budget || 0) - (t.spent || 0)))}
+        ${row('Countdown', (t) => (t.days_until != null ? `${t.days_until} days` : '—'))}
+        ${row('Checklist', (t) => { const c = t.checklist || []; return c.length ? `${c.filter((x) => x.done).length}/${c.length}` : '—'; })}
+        ${row('Photos', (t) => t.media_count || 0)}
+      </tbody>
+    </table>`;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal wf-modal-wide" role="dialog">
+      <div class="wf-modal-header"><h3>Compare trips</h3><p>All trips side by side.</p></div>
+      <div class="wf-modal-body"><div class="table-wrap">${table}</div></div>
+      <div class="wf-modal-footer"><button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Close</button></div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+}
+
 function switchTab(tabId) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.classList.toggle('active', t.dataset.tab === tabId);
@@ -527,7 +725,7 @@ function renderWelcome(data) {
       <p>${fmt.todayLabel()} · ${data.upcoming_events.length} events this week · ${data.notifications_unread} notifications</p>
     </div>
     <div class="welcome-meta">
-      <div class="welcome-meta-item"><strong>${h?.days_until ?? '—'}</strong><span>Days to Portugal</span></div>
+      <div class="welcome-meta-item"><strong>${h?.days_until ?? '—'}</strong><span>Days to ${esc((h?.title || 'holiday').split(',')[0])}</span></div>
       <div class="welcome-meta-item"><strong>${fmt.gbp(data.finance_summary.joint_balance)}</strong><span>Joint balance</span></div>
       <div class="welcome-meta-item"><strong>${data.tasks.filter((t) => !t.done).length}</strong><span>Tasks open</span></div>
     </div>`;
@@ -572,7 +770,7 @@ function renderHome(data) {
   const { users, upcoming_events, upcoming_bills, upcoming_appointments, next_holiday, finance_summary, tasks, documents } = data;
 
   document.getElementById('home-stats').innerHTML = `
-    <div class="stat"><span>${upcoming_events.length}</span><label>Events this week</label><div class="stat-trend up">+2 from Google</div></div>
+    <div class="stat"><span>${upcoming_events.length}</span><label>Events this week</label><div class="stat-trend up">${upcoming_events.filter((e) => e.source === 'google').length} from Google</div></div>
     <div class="stat"><span>${upcoming_bills.length}</span><label>Bills due</label><div class="stat-trend neutral">${fmt.gbp(finance_summary.bills_due_this_month)} total</div></div>
     <div class="stat"><span>${upcoming_appointments.length}</span><label>Appointments</label><div class="stat-trend neutral">Next: ${fmt.date(upcoming_appointments[0]?.datetime)}</div></div>
     <div class="stat"><span>${next_holiday?.days_until ?? '—'}</span><label>Days to holiday</label><div class="stat-trend up">${next_holiday?.title || ''}</div></div>`;
@@ -683,38 +881,102 @@ function renderHome(data) {
     </div>`;
 }
 
-function renderCalendar(data) {
-  const { users, events } = data;
-  document.getElementById('calendar-agenda').innerHTML = events
-    .map((e) => {
-      const col = userColour(users, e.user_id);
-      return `
+function calYmd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function calStartOfWeek(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const offset = (x.getDay() + 6) % 7; // Monday = 0
+  x.setDate(x.getDate() - offset);
+  return x;
+}
+
+function calAgendaRow(users, e) {
+  return `
       <div class="list-item">
         <div class="list-item-time">${e.all_day ? 'All day' : fmt.time(e.start)}</div>
         <div class="list-item-body">
-          <div class="list-item-title">${e.title}</div>
-          <div class="list-item-meta">${fmt.date(e.start)} · ${userName(users, e.user_id)}${e.location ? ` · 📍 ${e.location}` : ''}</div>
+          <div class="list-item-title">${esc(e.title)}</div>
+          <div class="list-item-meta">${fmt.date(e.start)} · ${userName(users, e.user_id)}${e.location ? ` · 📍 ${esc(e.location)}` : ''}</div>
         </div>
-        <span class="cal-event" style="background:${col}">${userName(users, e.user_id)}</span>
+        <span class="cal-event" style="background:${userColour(users, e.user_id)}">${userName(users, e.user_id)}</span>
+      </div>`;
+}
+
+function renderCalendar(data) {
+  const { users, events } = data;
+  if (!calCursor) calCursor = new Date();
+  const todayIso = calYmd(new Date());
+
+  // Right-hand agenda panel: upcoming events from today onward
+  const upcoming = events
+    .filter((e) => (e.start || '').slice(0, 10) >= todayIso)
+    .sort((a, b) => (a.start || '').localeCompare(b.start || ''))
+    .slice(0, 12);
+  document.getElementById('calendar-agenda').innerHTML = upcoming.length
+    ? upcoming.map((e) => calAgendaRow(users, e)).join('')
+    : '<p class="hint-small">No upcoming events.</p>';
+
+  document.querySelectorAll('[data-action^="cal-view-"]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.action === `cal-view-${calView}`);
+  });
+
+  const label = document.getElementById('cal-month-label');
+  const grid = document.getElementById('calendar-grid');
+
+  if (calView === 'agenda') {
+    label.textContent = 'Agenda';
+    grid.className = 'calendar-agenda-list';
+    const sorted = [...events].sort((a, b) => (a.start || '').localeCompare(b.start || ''));
+    grid.innerHTML = sorted.length
+      ? sorted.map((e) => calAgendaRow(users, e)).join('')
+      : '<p class="hint-small">No events yet.</p>';
+    return;
+  }
+
+  grid.className = 'calendar-week';
+  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const cells = [];
+  if (calView === 'week') {
+    const start = calStartOfWeek(calCursor);
+    label.textContent = `Week of ${start.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      cells.push(d);
+    }
+  } else {
+    const first = new Date(calCursor.getFullYear(), calCursor.getMonth(), 1);
+    label.textContent = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+    const lead = (first.getDay() + 6) % 7;
+    const gridStart = new Date(first);
+    gridStart.setDate(1 - lead);
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(gridStart);
+      d.setDate(gridStart.getDate() + i);
+      cells.push(d);
+    }
+  }
+
+  let html = dayNames.map((d) => `<div class="cal-day-header">${d}</div>`).join('');
+  html += cells
+    .map((d) => {
+      const iso = calYmd(d);
+      const muted = calView === 'month' && d.getMonth() !== calCursor.getMonth();
+      const dayEvents = events.filter((e) => (e.start || '').slice(0, 10) === iso);
+      return `
+      <div class="cal-day${iso === todayIso ? ' today' : ''}"${muted ? ' style="opacity:.4"' : ''}>
+        <div class="cal-day-num">${d.getDate()}</div>
+        ${dayEvents
+          .map(
+            (e) => `<div class="cal-event" style="background:${userColour(users, e.user_id)}" title="${esc(e.title)}">${esc(e.title)}</div>`
+          )
+          .join('')}
       </div>`;
     })
     .join('');
-
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  const start = new Date('2026-07-06');
-  let html = days.map((d) => `<div class="cal-day-header">${d}</div>`).join('');
-  for (let i = -1; i < 34; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const iso = d.toISOString().slice(0, 10);
-    const dayEvents = events.filter((e) => e.start.startsWith(iso));
-    html += `
-      <div class="cal-day${iso === '2026-07-05' ? ' today' : ''}">
-        <div class="cal-day-num">${d.getDate()}</div>
-        ${dayEvents.map((e) => `<div class="cal-event" style="background:${userColour(users, e.user_id)}" title="${e.title}">${e.title}</div>`).join('')}
-      </div>`;
-  }
-  document.getElementById('calendar-grid').innerHTML = html;
+  grid.innerHTML = html;
 }
 
 function renderFinances(data) {
@@ -852,17 +1114,19 @@ function renderAppointments(data, filter = 'all', category = 'all') {
       <td><span class="cat-pill ${a.category}">${a.category}</span></td>
       <td><span class="status-tag ${a.status}">${a.status}</span></td>
       <td>
-        <button class="btn btn-sm btn-ghost wf-action" data-action="edit-appointment" data-modal="add-appointment">Edit</button>
+        <button class="btn btn-sm btn-ghost wf-action" data-action="edit-appointment" data-appt-id="${a.id}">Edit</button>
       </td>
     </tr>`
     )
     .join('');
 }
 
-function renderHolidays(data) {
+function renderHolidays(data, filter = tripFilter) {
   const { trips, ideas } = data;
+  const shownTrips = filter === 'all' ? trips : trips.filter((t) => t.status === filter);
 
-  document.getElementById('holiday-trips').innerHTML = trips
+  document.getElementById('holiday-trips').innerHTML = shownTrips.length
+    ? shownTrips
     .map((t) => {
       const checklist = (t.checklist || [])
         .map((c) => `<li class="${c.done ? 'done' : ''}"><span class="checklist-box">${c.done ? '✓' : ''}</span>${c.label}</li>`)
@@ -890,12 +1154,13 @@ function renderHolidays(data) {
             <button class="btn btn-sm btn-primary wf-action" data-action="view-trip" data-trip-id="${t.id}">Details</button>
             <button class="btn btn-sm btn-soft wf-action" data-action="add-packing" data-trip-id="${t.id}" data-template="beach">Packing</button>
             <button class="btn btn-sm btn-soft wf-action" data-tab-link="media" data-media-trip="${t.id}">Photos</button>
-            <button class="btn btn-sm btn-outline wf-action" data-action="edit-trip">Edit</button>
+            <button class="btn btn-sm btn-outline wf-action" data-action="edit-trip" data-trip-id="${t.id}">Edit</button>
           </div>
         </div>
       </article>`;
     })
-    .join('');
+    .join('')
+    : '<div class="vault-empty"><p>No trips in this filter.</p></div>';
 
   document.getElementById('holiday-ideas').innerHTML = ideas
     .map(
@@ -1299,10 +1564,10 @@ function renderSettings(data) {
           <div class="connection-icon">✨</div>
           <div>
             <div class="connection-name">OpenRouter API</div>
-            <div class="connection-status">Not configured — add OPENROUTER_API_KEY in Phase 2</div>
+            <div class="connection-status ${aiOk ? 'connected' : ''}">${aiOk ? 'Connected — powering holiday ideas, assistant & receipt scan' : 'Not configured — add OPENROUTER_API_KEY to .env'}</div>
           </div>
         </div>
-        <button class="btn btn-sm btn-ai wf-action" data-action="holiday-idea" data-modal="holiday-ai" ${aiOk ? '' : 'disabled title="Configure OpenRouter in .env"'}>Configure</button>
+        <button class="btn btn-sm btn-ai wf-action" data-action="holiday-idea" data-modal="holiday-ai" ${aiOk ? '' : 'disabled title="Configure OpenRouter in .env"'}>${aiOk ? 'Try it' : 'Configure'}</button>
       </div>
     </div>
     <div class="settings-section">
@@ -1316,7 +1581,7 @@ function renderSettings(data) {
             <span class="member-dot" style="background:${u.colour};width:12px;height:12px"></span>
             <div class="connection-name">${u.name}</div>
           </div>
-          <button class="btn btn-sm btn-ghost wf-action" data-action="edit-member">Edit</button>
+          <button class="btn btn-sm btn-ghost wf-action" data-action="edit-member" data-user-id="${u.id}">Edit</button>
         </div>`
         )
         .join('')}
@@ -1399,7 +1664,7 @@ function closeLoginPreview() {
   document.getElementById('login-overlay').hidden = true;
 }
 
-function renderNotifications(notifications, unread) {
+function renderNotifications(reminders, unread) {
   const badge = document.getElementById('notif-badge');
   if (unread > 0) {
     badge.hidden = false;
@@ -1407,9 +1672,12 @@ function renderNotifications(notifications, unread) {
   } else {
     badge.hidden = true;
   }
-  document.getElementById('notif-list').innerHTML = notifications
-    .map((n) => `<div class="notif-item${n.read ? '' : ' unread'}">${n.text}<time>${n.time}</time></div>`)
-    .join('');
+  const list = reminders || [];
+  document.getElementById('notif-list').innerHTML = list.length
+    ? list
+        .map((n) => `<div class="notif-item unread">${esc(n.text)}<time>${esc(n.when || '')}</time></div>`)
+        .join('')
+    : '<p class="hint-small" style="padding:14px">No reminders right now.</p>';
 }
 
 function initTabs() {
@@ -1480,6 +1748,76 @@ function initActions() {
           load();
         })
         .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action && action.startsWith('cal-')) {
+      if (!calCursor) calCursor = new Date();
+      if (action === 'cal-prev') {
+        if (calView === 'week') calCursor.setDate(calCursor.getDate() - 7);
+        else calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() - 1, 1);
+      } else if (action === 'cal-next') {
+        if (calView === 'week') calCursor.setDate(calCursor.getDate() + 7);
+        else calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() + 1, 1);
+      } else if (action === 'cal-today') {
+        calCursor = new Date();
+      } else if (action === 'cal-view-month') {
+        calView = 'month';
+      } else if (action === 'cal-view-week') {
+        calView = 'week';
+      } else if (action === 'cal-view-agenda') {
+        calView = 'agenda';
+      }
+      if (store.calendar) renderCalendar(store.calendar);
+      return;
+    }
+    if (['filter-all-trips', 'filter-booked', 'filter-planning', 'filter-ideas'].includes(action)) {
+      const map = { 'filter-all-trips': 'all', 'filter-booked': 'booked', 'filter-planning': 'planning', 'filter-ideas': 'idea' };
+      tripFilter = map[action] || 'all';
+      document.querySelectorAll('[data-action^="filter-"]').forEach((b) => b.classList.toggle('active', b.dataset.action === action));
+      if (store.holidays) renderHolidays(store.holidays);
+      return;
+    }
+    if (action === 'preview-login') {
+      openLoginPreview();
+      return;
+    }
+    if (action === 'transfer') {
+      openTransferModal();
+      return;
+    }
+    if (action === 'export-transactions') {
+      const a = document.createElement('a');
+      a.href = `${API}/finances/export`;
+      a.download = 'transactions.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('Exported transactions.csv');
+      return;
+    }
+    if (action === 'sync-appointments') {
+      api('/appointments/sync-calendar', { method: 'POST' })
+        .then((r) => {
+          showToast(r.created ? `Synced ${r.created} appointment(s) to calendar` : 'Calendar already up to date');
+          load();
+        })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'compare-trips') {
+      openCompareTripsModal();
+      return;
+    }
+    if (action === 'edit-trip') {
+      if (btn.dataset.tripId) openEditTripModal(btn.dataset.tripId);
+      return;
+    }
+    if (action === 'edit-member') {
+      if (btn.dataset.userId) openEditMemberModal(btn.dataset.userId);
+      return;
+    }
+    if (action === 'edit-appointment') {
+      if (btn.dataset.apptId) openEditAppointmentModal(btn.dataset.apptId);
       return;
     }
     if (action === 'import-csv') {
@@ -2078,7 +2416,7 @@ async function load() {
   renderSubscriptions(subscriptions);
   renderDocuments(documents);
   renderSettings(settings);
-  renderNotifications(settings.notifications || [], dashboard.notifications_unread);
+  renderNotifications(dashboard.reminders || [], dashboard.notifications_unread);
   await refreshAssistantStatus();
 }
 

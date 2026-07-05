@@ -34,7 +34,10 @@ DEFAULT_SECRETS = {
 }
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-change-me-in-production")
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://localhost:8090")
-HTTPS_ONLY = PUBLIC_URL.startswith("https://") or IS_PRODUCTION
+# Secure-cookie flag follows the PUBLIC_URL scheme (not ENV) so a production box
+# reached over plain http://IP (no domain yet) still keeps sessions. Set
+# PUBLIC_URL=https://… once TLS is in front and cookies become Secure automatically.
+HTTPS_ONLY = PUBLIC_URL.startswith("https://")
 
 if IS_PRODUCTION and (not SECRET_KEY or SECRET_KEY in DEFAULT_SECRETS):
     logger.error("Refusing to start: set a strong SECRET_KEY in .env for production")

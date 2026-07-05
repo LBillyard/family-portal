@@ -1,0 +1,6 @@
+# Shell scripts and systemd units must use LF or Linux refuses to run them
+# (a CRLF install-ubuntu.sh broke the first AWS deploy with "set: pipefail: invalid option").
+*.sh text eol=lf
+*.service text eol=lf
+# Windows-only scripts stay CRLF.
+*.ps1 text eol=crlf
