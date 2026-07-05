@@ -107,7 +107,7 @@ function userColour(users, id) {
   return users.find((u) => u.id === id)?.colour || '#718096';
 }
 function userName(users, id) {
-  return users.find((u) => u.id === id)?.name || id;
+  return esc(users.find((u) => u.id === id)?.name || id);
 }
 
 const MODALS = {
@@ -692,6 +692,39 @@ function openCompareTripsModal() {
   document.getElementById('modal-backdrop').onclick = closeModal;
 }
 
+function openChangePasswordModal() {
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Change password</h3><p>Update the password for ${esc(currentUser?.name || 'your account')}.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Current password</span><input type="password" id="cp-current" autocomplete="current-password"></label>
+        <label class="field field-full"><span>New password</span><input type="password" id="cp-new" autocomplete="new-password"></label>
+        <label class="field field-full"><span>Confirm new password</span><input type="password" id="cp-confirm" autocomplete="new-password"></label>
+        <p class="hint-small">At least 8 characters.</p>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="cp-save">Update password</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('cp-save').onclick = async () => {
+    const current = document.getElementById('cp-current').value;
+    const next = document.getElementById('cp-new').value;
+    const confirmVal = document.getElementById('cp-confirm').value;
+    if (next.length < 8) return showToast('New password must be at least 8 characters', true);
+    if (next !== confirmVal) return showToast('New passwords do not match', true);
+    try {
+      await api('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: current, new_password: next }) });
+      closeModal();
+      showToast('Password updated');
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
 function switchTab(tabId) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.classList.toggle('active', t.dataset.tab === tabId);
@@ -705,14 +738,14 @@ function renderMembers(users) {
   document.getElementById('member-chips').innerHTML = users
     .map(
       (u) =>
-        `<span class="member-chip"><span class="member-dot" style="background:${u.colour}"></span>${u.name}${u.google_connected ? ' · Google ✓' : ''}</span>`
+        `<span class="member-chip"><span class="member-dot" style="background:${esc(u.colour)}"></span>${esc(u.name)}${u.google_connected ? ' · Google ✓' : ''}</span>`
     )
     .join('');
 
   document.getElementById('cal-filters').innerHTML = users
     .map(
       (u) =>
-        `<label class="filter-chip"><input type="checkbox" checked><span style="display:inline-flex;align-items:center;gap:6px"><span class="member-dot" style="background:${u.colour}"></span>${u.name}</span></label>`
+        `<label class="filter-chip"><input type="checkbox" checked><span style="display:inline-flex;align-items:center;gap:6px"><span class="member-dot" style="background:${esc(u.colour)}"></span>${esc(u.name)}</span></label>`
     )
     .join('') + '<label class="filter-chip"><input type="checkbox" checked><span>Shared</span></label>';
 }
@@ -760,7 +793,7 @@ function renderReminders(reminders) {
       (r) => `
     <div class="reminder-chip">
       <div class="reminder-chip-icon ${r.type}">${icons[r.type] || '•'}</div>
-      <div><strong>${r.text}</strong><span>${r.when}</span></div>
+      <div><strong>${esc(r.text)}</strong><span>${esc(r.when)}</span></div>
     </div>`
     )
     .join('');
@@ -782,8 +815,8 @@ function renderHome(data) {
       <div class="list-item">
         <div class="list-item-time">${e.all_day ? 'All day' : fmt.time(e.start)}</div>
         <div class="list-item-body">
-          <div class="list-item-title">${e.title}</div>
-          <div class="list-item-meta">${fmt.date(e.start)} · ${userName(users, e.user_id)}${e.location ? ` · ${e.location}` : ''}
+          <div class="list-item-title">${esc(e.title)}</div>
+          <div class="list-item-meta">${fmt.date(e.start)} · ${userName(users, e.user_id)}${e.location ? ` · ${esc(e.location)}` : ''}
             <span class="source-tag ${e.source}">${e.source}</span></div>
         </div>
         <span class="member-dot" style="background:${col};margin-top:6px"></span>
@@ -798,7 +831,7 @@ function renderHome(data) {
     <div class="task-item${t.done ? ' done' : ''}">
       <div class="task-check${t.done ? ' done' : ''} wf-action" data-action="toggle-task" data-task-id="${t.id}"></div>
       <div class="task-body">
-        <div class="task-title">${t.title}</div>
+        <div class="task-title">${esc(t.title)}</div>
         <div class="task-meta">
           ${userName(users, t.assignee)}
           ${t.due ? `· Due ${fmt.date(t.due)}` : ''}
@@ -814,8 +847,8 @@ function renderHome(data) {
       (b) => `
     <div class="list-item">
       <div class="list-item-body">
-        <div class="list-item-title">${b.name}</div>
-        <div class="list-item-meta">Due ${b.due_day} ${b.recurrence} · ${b.category}</div>
+        <div class="list-item-title">${esc(b.name)}</div>
+        <div class="list-item-meta">Due ${b.due_day} ${esc(b.recurrence)} · ${esc(b.category)}</div>
       </div>
       <div class="list-item-amount negative">${fmt.gbp(b.amount)}</div>
     </div>`
@@ -828,8 +861,8 @@ function renderHome(data) {
     <div class="list-item">
       <div class="list-item-time">${fmt.date(a.datetime)}</div>
       <div class="list-item-body">
-        <div class="list-item-title">${a.title}</div>
-        <div class="list-item-meta">${a.provider} · ${fmt.time(a.datetime)}</div>
+        <div class="list-item-title">${esc(a.title)}</div>
+        <div class="list-item-meta">${esc(a.provider)} · ${fmt.time(a.datetime)}</div>
       </div>
     </div>`
     )
@@ -840,7 +873,7 @@ function renderHome(data) {
     const total = next_holiday.checklist?.length || 0;
     document.getElementById('home-holiday').innerHTML = `
       <div class="holiday-countdown">${next_holiday.days_until} days</div>
-      <p style="font-size:1rem;font-weight:600;color:var(--navy-900);margin:8px 0 4px">${next_holiday.title}</p>
+      <p style="font-size:1rem;font-weight:600;color:var(--navy-900);margin:8px 0 4px">${esc(next_holiday.title)}</p>
       <p style="font-size:0.875rem;color:var(--text-muted)">${fmt.date(next_holiday.start)} → ${fmt.date(next_holiday.end)}</p>
       ${total ? `<p style="font-size:0.8125rem;color:var(--text-muted);margin-top:10px">Checklist: ${done}/${total} done</p>
         <div class="progress-bar"><div class="progress-fill" style="width:${Math.round((done / total) * 100)}%"></div></div>` : ''}
@@ -854,8 +887,8 @@ function renderHome(data) {
           (d) => `
       <div class="list-item">
         <div class="list-item-body">
-          <div class="list-item-title">${d.name}</div>
-          <div class="list-item-meta">${DOC_CATEGORY_LABELS[d.category] || d.category}${d.expiry ? ' · ' + fmt.date(d.expiry) : ''}${d.has_file ? ' · 📎' : ''}</div>
+          <div class="list-item-title">${esc(d.name)}</div>
+          <div class="list-item-meta">${esc(DOC_CATEGORY_LABELS[d.category] || d.category)}${d.expiry ? ' · ' + fmt.date(d.expiry) : ''}${d.has_file ? ' · 📎' : ''}</div>
         </div>
         <span class="status-tag ${docStatusClass(d.status)}">${docStatusLabel(d.status)}</span>
       </div>`
@@ -1005,7 +1038,7 @@ function renderFinances(data) {
           <div class="connection-info">
             <div class="connection-icon">🏦</div>
             <div>
-              <div class="connection-name">${c.provider_name}</div>
+              <div class="connection-name">${esc(c.provider_name)}</div>
               <div class="connection-status connected">${c.last_synced_at ? 'Synced ' + fmt.datetime(c.last_synced_at) : 'Connected — tap Sync all banks'}</div>
             </div>
           </div>
@@ -1024,9 +1057,9 @@ function renderFinances(data) {
     .map(
       (a) => `
     <div class="account-tile ${a.type}${a.linked ? ' linked' : ''}">
-      <div class="account-tile-name">${a.name}${a.linked ? ' <span class="linked-badge">Live</span>' : ''}</div>
+      <div class="account-tile-name">${esc(a.name)}${a.linked ? ' <span class="linked-badge">Live</span>' : ''}</div>
       <div class="account-tile-balance">${fmt.gbp(a.balance)}</div>
-      <div class="account-tile-inst">${a.institution}</div>
+      <div class="account-tile-inst">${esc(a.institution)}</div>
     </div>`
     )
     .join('');
@@ -1036,8 +1069,8 @@ function renderFinances(data) {
       (b) => `
     <div class="list-item${b.paid ? ' bill-paid' : ''}">
       <div class="list-item-body">
-        <div class="list-item-title">${b.name}</div>
-        <div class="list-item-meta">Day ${b.due_day} · ${b.category}${b.paid ? ' · ✓ Paid' : ''}</div>
+        <div class="list-item-title">${esc(b.name)}</div>
+        <div class="list-item-meta">Day ${b.due_day} · ${esc(b.category)}${b.paid ? ' · ✓ Paid' : ''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <div class="list-item-amount negative">${fmt.gbp(b.amount)}</div>
@@ -1054,7 +1087,7 @@ function renderFinances(data) {
       return `
       <div>
         <div class="budget-row-head">
-          <span>${b.category}</span>
+          <span>${esc(b.category)}</span>
           <span class="${pct >= 100 ? 'over' : ''}">${fmt.gbp(b.spent)} / ${fmt.gbp(b.limit)}</span>
         </div>
         <div class="progress-bar budget"><div class="progress-fill ${cls}" style="width:${Math.min(pct, 100)}%"></div></div>
@@ -1067,7 +1100,7 @@ function renderFinances(data) {
       const pct = Math.round((g.current / g.target) * 100);
       return `
       <div class="savings-card">
-        <h4>${g.name}</h4>
+        <h4>${esc(g.name)}</h4>
         <div class="savings-amounts"><strong>${fmt.gbp(g.current)}</strong><span>of ${fmt.gbp(g.target)}</span></div>
         <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${g.colour}"></div></div>
       </div>`;
@@ -1083,9 +1116,9 @@ function renderFinances(data) {
       (t) => `
     <tr>
       <td>${fmt.date(t.date)}</td>
-      <td>${t.description}</td>
-      <td>${t.category}</td>
-      <td>${t.account}</td>
+      <td>${esc(t.description)}</td>
+      <td>${esc(t.category)}</td>
+      <td>${esc(t.account)}</td>
       <td class="amount-cell ${t.amount >= 0 ? 'positive' : 'negative'}">${fmt.gbp(t.amount)}</td>
     </tr>`
     )
@@ -1100,19 +1133,19 @@ function renderAppointments(data, filter = 'all', category = 'all') {
   const cats = [...new Set(appointments.map((a) => a.category))];
   document.getElementById('appt-categories').innerHTML =
     `<button class="cat-btn active wf-action" data-appt-cat="all">All</button>` +
-    cats.map((c) => `<button class="cat-btn wf-action" data-appt-cat="${c}">${c}</button>`).join('');
+    cats.map((c) => `<button class="cat-btn wf-action" data-appt-cat="${esc(c)}">${esc(c)}</button>`).join('');
 
   document.getElementById('appointments-body').innerHTML = filtered
     .map(
       (a) => `
     <tr>
       <td>${fmt.datetime(a.datetime)}</td>
-      <td><strong>${a.title}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">Reminder ${a.reminder_days}d before</span></td>
-      <td>${a.provider}</td>
-      <td>${a.location || '—'}</td>
+      <td><strong>${esc(a.title)}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">Reminder ${a.reminder_days}d before</span></td>
+      <td>${esc(a.provider)}</td>
+      <td>${esc(a.location || '—')}</td>
       <td><span class="member-dot" style="background:${userColour(users, a.user_id)};display:inline-block;vertical-align:middle;margin-right:6px"></span>${userName(users, a.user_id)}</td>
-      <td><span class="cat-pill ${a.category}">${a.category}</span></td>
-      <td><span class="status-tag ${a.status}">${a.status}</span></td>
+      <td><span class="cat-pill ${esc(a.category)}">${esc(a.category)}</span></td>
+      <td><span class="status-tag ${esc(a.status)}">${esc(a.status)}</span></td>
       <td>
         <button class="btn btn-sm btn-ghost wf-action" data-action="edit-appointment" data-appt-id="${a.id}">Edit</button>
       </td>
@@ -1129,7 +1162,7 @@ function renderHolidays(data, filter = tripFilter) {
     ? shownTrips
     .map((t) => {
       const checklist = (t.checklist || [])
-        .map((c) => `<li class="${c.done ? 'done' : ''}"><span class="checklist-box">${c.done ? '✓' : ''}</span>${c.label}</li>`)
+        .map((c) => `<li class="${c.done ? 'done' : ''}"><span class="checklist-box">${c.done ? '✓' : ''}</span>${esc(c.label)}</li>`)
         .join('');
       const bookings = (t.bookings || [])
         .map((b) => `<a href="#" class="booking-link wf-action" data-action="view-booking"><span>${b.type}: ${b.ref}</span><span>→</span></a>`)
@@ -1138,8 +1171,8 @@ function renderHolidays(data, filter = tripFilter) {
       return `
       <article class="holiday-card">
         <div class="holiday-card-header">
-          <span class="status-tag ${t.status}">${t.status}</span>
-          <h3>${t.title}</h3>
+          <span class="status-tag ${esc(t.status)}">${esc(t.status)}</span>
+          <h3>${esc(t.title)}</h3>
           ${t.start ? `<p style="font-size:0.8125rem;opacity:0.85;margin-top:4px">${fmt.date(t.start)} → ${fmt.date(t.end)}</p>` : '<p style="font-size:0.8125rem;opacity:0.85;margin-top:4px">Dates TBC</p>'}
         </div>
         <div class="holiday-card-body">
@@ -1166,9 +1199,9 @@ function renderHolidays(data, filter = tripFilter) {
     .map(
       (i) => `
     <article class="idea-card">
-      <div class="idea-tags">${(i.tags || []).map((t) => `<span class="idea-tag">${t}</span>`).join('')}</div>
-      <h4>${i.destination}</h4>
-      <p>${i.summary}</p>
+      <div class="idea-tags">${(i.tags || []).map((t) => `<span class="idea-tag">${esc(t)}</span>`).join('')}</div>
+      <h4>${esc(i.destination)}</h4>
+      <p>${esc(i.summary)}</p>
       <p style="font-size:0.8125rem;color:var(--text-muted);margin-bottom:12px">Est. ${fmt.gbp(i.budget_estimate)}</p>
       <div style="display:flex;gap:8px">
         <button class="btn btn-sm ${i.saved ? 'btn-secondary' : 'btn-primary'} wf-action" data-action="save-idea" data-idea-id="${i.id}">${i.saved ? 'Saved ✓' : 'Save'}</button>
@@ -1223,11 +1256,11 @@ function renderDocuments(data, filter = vaultFilter) {
           (d) => `
       <article class="vault-card ${d.has_file ? 'has-file' : ''}">
         <div class="vault-card-top">
-          <span class="vault-cat-pill">${DOC_CATEGORY_LABELS[d.category] || d.category}</span>
+          <span class="vault-cat-pill">${esc(DOC_CATEGORY_LABELS[d.category] || d.category)}</span>
           <span class="status-tag ${docStatusClass(d.status)}">${docStatusLabel(d.status)}</span>
         </div>
-        <h3 class="vault-card-title">${d.name}</h3>
-        ${d.notes ? `<p class="vault-card-notes">${d.notes}</p>` : ''}
+        <h3 class="vault-card-title">${esc(d.name)}</h3>
+        ${d.notes ? `<p class="vault-card-notes">${esc(d.notes)}</p>` : ''}
         <div class="vault-card-meta">
           ${d.expiry ? `<span>Expires ${fmt.date(d.expiry)}</span>` : '<span>No expiry set</span>'}
           ${d.has_file ? `<span>${fmt.fileSize(d.file_size)}</span>` : '<span class="vault-no-file">No file yet</span>'}
@@ -1499,8 +1532,9 @@ function renderSettings(data) {
     </div>
     <div class="settings-section">
       <h3>Login &amp; access</h3>
-      <p>Simple auth for two users — preview the login screen.</p>
-      <button class="btn btn-outline wf-action" data-action="preview-login">Preview login screen</button>
+      <p>Change your password or preview the login screen.</p>
+      <button class="btn btn-primary wf-action" data-action="change-password">Change password</button>
+      <button class="btn btn-outline wf-action" data-action="preview-login" style="margin-left:8px">Preview login screen</button>
     </div>
     <div class="settings-section">
       <h3>Calendar connections</h3>
@@ -1781,6 +1815,10 @@ function initActions() {
       openLoginPreview();
       return;
     }
+    if (action === 'change-password') {
+      openChangePasswordModal();
+      return;
+    }
     if (action === 'transfer') {
       openTransferModal();
       return;
@@ -2050,6 +2088,10 @@ function initActions() {
   });
 
   document.getElementById('login-close')?.addEventListener('click', closeLoginPreview);
+  document.getElementById('login-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    document.getElementById('login-demo')?.click();
+  });
   document.getElementById('login-demo')?.addEventListener('click', async () => {
     const email = document.querySelector('#login-overlay input[type="email"]')?.value;
     const password = document.querySelector('#login-overlay input[type="password"]')?.value;

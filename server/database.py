@@ -1,6 +1,9 @@
 """SQLite persistence for Family Portal."""
 
+import base64
+import hashlib
 import json
+import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -9,6 +12,38 @@ from pathlib import Path
 from typing import Any, Optional
 
 DB_PATH = Path(__file__).parent.parent / "data" / "family.db"
+
+
+# --- Encryption at rest for OAuth/bank tokens (key derived from SECRET_KEY) ---
+
+_ENC_PREFIX = "enc:"
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+
+    secret = os.environ.get("SECRET_KEY", "dev-change-me-in-production").encode()
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret).digest())
+    return Fernet(key)
+
+
+def _enc(value: Optional[str]) -> Optional[str]:
+    """Encrypt a secret before storing. None/empty pass through unchanged."""
+    if not value:
+        return value
+    return _ENC_PREFIX + _fernet().encrypt(value.encode()).decode()
+
+
+def _dec(value: Optional[str]) -> Optional[str]:
+    """Decrypt a stored secret. Legacy plaintext (no prefix) is returned as-is."""
+    if not value or not value.startswith(_ENC_PREFIX):
+        return value
+    from cryptography.fernet import InvalidToken
+
+    try:
+        return _fernet().decrypt(value[len(_ENC_PREFIX):].encode()).decode()
+    except InvalidToken:
+        return None
 
 
 def _utcnow() -> str:
@@ -605,7 +640,11 @@ def get_user_by_email(email: str) -> Optional[dict]:
 def get_user(user_id: str) -> Optional[dict]:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return row_to_dict(row) if row else None
+        if not row:
+            return None
+        d = row_to_dict(row)
+        d["google_token_json"] = _dec(d.get("google_token_json"))
+        return d
 
 
 def list_users() -> list[dict]:
@@ -641,6 +680,12 @@ def update_user(user_id: str, data: dict) -> Optional[dict]:
             conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return user_public(row_to_dict(row))
+
+
+def update_user_password(user_id: str, password_hash: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+        return cur.rowcount > 0
 
 
 # --- Events ---
@@ -1161,7 +1206,7 @@ def set_setting(key: str, value: str) -> None:
 
 def save_google_token(user_id: str, token_json: str) -> None:
     with get_conn() as conn:
-        conn.execute("UPDATE users SET google_token_json = ? WHERE id = ?", (token_json, user_id))
+        conn.execute("UPDATE users SET google_token_json = ? WHERE id = ?", (_enc(token_json), user_id))
 
 
 def upsert_google_event(user_id: str, google_id: str, title: str, start: str, end: str | None, all_day: bool, location: str | None) -> None:
@@ -1267,7 +1312,7 @@ def create_bank_connection(
                (id, user_id, provider_id, provider_name, access_token, refresh_token,
                 token_expires_at, status, connected_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
-            (cid, user_id, provider_id, provider_name, access_token, refresh_token, token_expires_at, now),
+            (cid, user_id, provider_id, provider_name, _enc(access_token), _enc(refresh_token), token_expires_at, now),
         )
         row = conn.execute("SELECT * FROM bank_connections WHERE id = ?", (cid,)).fetchone()
         return _connection_public(row_to_dict(row))
@@ -1284,7 +1329,7 @@ def update_bank_tokens(
             """UPDATE bank_connections
                SET access_token = ?, refresh_token = ?, token_expires_at = ?, status = 'active'
                WHERE id = ?""",
-            (access_token, refresh_token, token_expires_at, connection_id),
+            (_enc(access_token), _enc(refresh_token), token_expires_at, connection_id),
         )
 
 
@@ -1301,10 +1346,15 @@ def list_bank_connections(user_id: Optional[str] = None) -> list[dict]:
 
 
 def get_bank_connection_internal(connection_id: str) -> Optional[dict]:
-    """Full connection including tokens — server use only."""
+    """Full connection including decrypted tokens — server use only."""
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM bank_connections WHERE id = ?", (connection_id,)).fetchone()
-        return row_to_dict(row) if row else None
+        if not row:
+            return None
+        d = row_to_dict(row)
+        d["access_token"] = _dec(d.get("access_token"))
+        d["refresh_token"] = _dec(d.get("refresh_token"))
+        return d
 
 
 def delete_bank_connection(connection_id: str) -> bool:

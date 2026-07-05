@@ -2,6 +2,7 @@
 
 import logging
 import secrets
+import time
 
 from urllib.parse import quote
 
@@ -21,6 +22,7 @@ from shared.schemas import (
     AppointmentUpdate,
     AssistantChatRequest,
     BillCreate,
+    ChangePasswordRequest,
     DocumentCreate,
     EventCreate,
     HolidayIdeaRequest,
@@ -51,14 +53,45 @@ def require_user(request: Request) -> dict:
     return user
 
 
+# --- Login brute-force throttle (per-email sliding window; single-worker in-memory) ---
+_LOGIN_MAX = 8
+_LOGIN_WINDOW = 300  # seconds
+_login_fails: dict[str, list[float]] = {}
+
+
+def _login_key(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _login_blocked(key: str) -> bool:
+    now = time.time()
+    fails = [t for t in _login_fails.get(key, []) if now - t < _LOGIN_WINDOW]
+    _login_fails[key] = fails
+    return len(fails) >= _LOGIN_MAX
+
+
 @router.post("/auth/login")
 def login(body: LoginRequest, request: Request):
+    key = _login_key(body.email)
+    if _login_blocked(key):
+        raise HTTPException(status_code=429, detail="Too many attempts — wait 5 minutes and try again")
     user = auth.authenticate(body.email, body.password)
     if not user:
+        _login_fails.setdefault(key, []).append(time.time())
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    _login_fails.pop(key, None)
     request.session.clear()
     request.session["user"] = user
     return {"user": user}
+
+
+@router.post("/auth/change-password")
+def change_password(body: ChangePasswordRequest, user: dict = Depends(require_user)):
+    full = db.get_user(user["id"])
+    if not full or not auth.verify_password(body.current_password, full["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    db.update_user_password(user["id"], auth.hash_password(body.new_password))
+    return {"ok": True}
 
 
 @router.post("/auth/logout")
