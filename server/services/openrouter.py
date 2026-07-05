@@ -60,7 +60,7 @@ async def generate_holiday_ideas(prompt: str, model: str | None = None) -> list[
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": os.environ.get("PUBLIC_URL", "http://localhost:8090"),
-        "X-Title": "Family Portal",
+        "X-Title": "The Hub",
     }
 
     async with httpx.AsyncClient(timeout=60.0) as client:

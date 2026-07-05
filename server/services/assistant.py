@@ -24,7 +24,7 @@ MAX_HISTORY = 24
 MAX_TOOL_ROUNDS = 8
 CONFIRM_TOOLS = {"log_transaction", "add_bill"}
 
-SYSTEM_PROMPT = """You are the Family Portal assistant for a UK household (two adults: Luke and Laura).
+SYSTEM_PROMPT = """You are The Hub, the household assistant for a UK family (two adults: Luke and Laura).
 You can read household data and take actions using tools — calendar, tasks, appointments, holidays, bills, and transactions.
 
 Rules:
@@ -708,7 +708,7 @@ async def _call_openrouter(messages: list[dict]) -> dict:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": os.environ.get("PUBLIC_URL", "http://localhost:8090"),
-        "X-Title": "Family Portal Assistant",
+        "X-Title": "The Hub Assistant",
     }
     async with httpx.AsyncClient(timeout=90.0) as client:
         resp = await client.post(OPENROUTER_URL, json=payload, headers=headers)

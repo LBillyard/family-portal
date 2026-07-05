@@ -48,7 +48,7 @@ async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> di
         "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
         "Content-Type": "application/json",
         "HTTP-Referer": os.environ.get("PUBLIC_URL", "http://localhost:8090"),
-        "X-Title": "Family Portal Receipts",
+        "X-Title": "The Hub Receipts",
     }
     async with httpx.AsyncClient(timeout=90.0) as client:
         resp = await client.post(OPENROUTER_URL, json=payload, headers=headers)

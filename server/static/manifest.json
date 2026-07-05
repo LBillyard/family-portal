@@ -1,6 +1,6 @@
 {
-  "name": "Family Portal",
-  "short_name": "Family",
+  "name": "The Hub",
+  "short_name": "The Hub",
   "description": "Calendar, finances, appointments and holidays for your household",
   "start_url": "/",
   "display": "standalone",

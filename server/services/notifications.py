@@ -72,11 +72,11 @@ def send_renewal_reminders() -> dict:
     if not urgent:
         return {"sent": False, "count": 0, "reason": "nothing due"}
 
-    lines = ["Family Portal — upcoming renewals:", ""]
+    lines = ["The Hub — upcoming renewals:", ""]
     for item in urgent:
         when = "today" if item["days_until"] == 0 else f"in {item['days_until']} day(s)"
         lines.append(f"• {item['title']} ({item['type']}) — {when} ({item['date']})")
     body = "\n".join(lines)
-    result = send_email("Family Portal renewals reminder", body)
+    result = send_email("The Hub renewals reminder", body)
     result["count"] = len(urgent)
     return result

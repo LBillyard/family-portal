@@ -1612,7 +1612,7 @@ function renderSettings(data) {
   document.getElementById('settings-content').innerHTML = `
     <div class="settings-section phase-checklist">
       <h3>Build progress</h3>
-      <p>Family Portal — ready to deploy when you are.</p>
+      <p>The Hub — ready to deploy when you are.</p>
       <ul class="phase-list">
         <li class="done">✓ SQLite database + CRUD</li>
         <li class="done">✓ Household login (2 users)</li>

@@ -175,7 +175,7 @@ async def ai_suggest(merchants: list[str]) -> dict[str, dict]:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": os.environ.get("PUBLIC_URL", "http://localhost:8090"),
-        "X-Title": "Family Portal Categoriser",
+        "X-Title": "The Hub Categoriser",
     }
     async with httpx.AsyncClient(timeout=90.0) as client:
         resp = await client.post(
