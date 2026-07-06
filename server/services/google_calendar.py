@@ -69,7 +69,21 @@ def exchange_code(code: str, code_verifier: str | None = None) -> dict:
 def _credentials(token_json: str):
     from google.oauth2.credentials import Credentials
 
-    return Credentials.from_authorized_user_info(json.loads(token_json), SCOPES)
+    # Build with scopes=None so the refresh does NOT send a `scope` param — Google
+    # then returns whatever scopes were actually granted to the refresh token.
+    # Passing a scope list (esp. a broadened one after adding the Gmail scope, or a
+    # value polluted into the stored token by an earlier save) makes refresh fail
+    # with invalid_scope for calendar-only connections, silently breaking sync.
+    # The token's real grant is what matters; the server enforces scope per-API.
+    info = json.loads(token_json)
+    return Credentials(
+        token=info.get("token"),
+        refresh_token=info.get("refresh_token"),
+        token_uri=info.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=info.get("client_id") or os.environ.get("GOOGLE_CLIENT_ID", "").strip(),
+        client_secret=info.get("client_secret") or os.environ.get("GOOGLE_CLIENT_SECRET", "").strip(),
+        scopes=None,
+    )
 
 
 def _service(creds):
@@ -93,13 +107,16 @@ def sync_account(account: dict) -> int:
     time_min = now.isoformat()
     time_max = (now + timedelta(days=120)).isoformat()
 
-    db.delete_events_for_google_account(account["id"])
-    count = 0
+    # Fetch the calendar list FIRST. If this fails (expired/invalid token), abort
+    # WITHOUT deleting — better to keep the last-known events than wipe the calendar.
     try:
         cal_items = service.calendarList().list().execute().get("items", [])
-    except Exception:
-        cal_items = [{"id": "primary", "primary": True}]
+    except Exception as exc:
+        logger.warning("Calendar sync aborted for %s (token/API error) — keeping existing events: %s", account.get("email"), exc)
+        return 0
 
+    db.delete_events_for_google_account(account["id"])
+    count = 0
     for cal in cal_items:
         # Only sync this account's OWN primary calendar — not the many other
         # calendars shared into a work account (staff diaries etc.), which would

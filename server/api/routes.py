@@ -557,9 +557,13 @@ def pay_bill(bill_id: str, _: dict = Depends(require_user)):
 @router.post("/bills/{bill_id}/lock")
 def lock_bill(bill_id: str, body: BillLock, _: dict = Depends(require_user)):
     """Lock a bill to a detected bank payment (subscription) so it auto-marks paid."""
-    bill = db.set_bill_lock(bill_id, body.subscription_id, locked=True)
-    if not bill:
+    existing = db.get_bill(bill_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Bill not found")
+    sub_id = body.subscription_id or existing.get("subscription_id")
+    if not sub_id:
+        raise HTTPException(status_code=400, detail="No matching bank payment to lock this bill to.")
+    db.set_bill_lock(bill_id, sub_id, locked=True)
     db.reconcile_locked_bills()
     return db.get_bill(bill_id)
 
@@ -574,10 +578,16 @@ def unlock_bill(bill_id: str, _: dict = Depends(require_user)):
 
 @router.post("/transactions")
 def create_transaction(body: TransactionCreate, _: dict = Depends(require_user)):
-    account_map = {a["name"]: a["id"] for a in db.list_accounts()}
+    accounts = db.list_accounts()
+    if not accounts:
+        raise HTTPException(status_code=400, detail="No account to log against yet — connect a bank or import a CSV first.")
+    by_name = {a["name"]: a["id"] for a in accounts}
+    valid_ids = {a["id"] for a in accounts}
+    default_id = next((a["id"] for a in accounts if a["type"] == "current"), accounts[0]["id"])
+    # Resolve to a REAL account id: accept a valid id, else map a name, else default.
     account_id = body.account_id
-    if account_id and account_id not in account_map.values():
-        account_id = account_map.get(account_id, "starling")
+    if not account_id or account_id not in valid_ids:
+        account_id = by_name.get(account_id or "", default_id)
     amount = body.amount
     if body.category != "Income" and amount > 0:
         amount = -abs(amount)
@@ -589,7 +599,7 @@ def create_transaction(body: TransactionCreate, _: dict = Depends(require_user))
         "description": body.description,
         "amount": amount,
         "category": body.category,
-        "account_id": account_id or "joint",
+        "account_id": account_id,
         "date": body.date,
     })
 
