@@ -98,6 +98,20 @@ class SavingsGoalUpdate(BaseModel):
     colour: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
+class MemoryCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    category: Optional[str] = None
+    subject: str = "family"
+    pinned: bool = False
+
+
+class MemoryUpdate(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    category: Optional[str] = None
+    subject: Optional[str] = None
+    pinned: Optional[bool] = None
+
+
 class TransactionCreate(BaseModel):
     description: str
     amount: float

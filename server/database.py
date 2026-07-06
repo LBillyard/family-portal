@@ -146,6 +146,21 @@ def init_db() -> None:
                 colour TEXT NOT NULL DEFAULT '#00a89e'
             );
 
+            -- Long-term family memory (RAG). Each fact carries an embedding (JSON
+            -- array) so the assistant can semantically retrieve what's relevant.
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id TEXT PRIMARY KEY,
+                text TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'preferences',
+                subject TEXT NOT NULL DEFAULT 'family',
+                source TEXT NOT NULL DEFAULT 'manual',
+                pinned INTEGER NOT NULL DEFAULT 0,
+                embedding TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_used_at TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -1096,6 +1111,96 @@ def update_savings_goal(goal_id: str, data: dict) -> Optional[dict]:
 def delete_savings_goal(goal_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM savings_goals WHERE id = ?", (goal_id,))
+        return cur.rowcount > 0
+
+
+# --- Family memory (RAG facts) ---
+
+def _memory_out(r: dict, *, include_embedding: bool = False) -> dict:
+    out = {
+        "id": r["id"],
+        "text": r["text"],
+        "category": r["category"],
+        "subject": r["subject"],
+        "source": r["source"],
+        "pinned": bool(r["pinned"]),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+    if include_embedding:
+        raw = r.get("embedding")
+        try:
+            out["embedding"] = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            out["embedding"] = None
+    return out
+
+
+def list_memory_facts(include_embedding: bool = True) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM memory_facts ORDER BY pinned DESC, updated_at DESC").fetchall()
+        return [_memory_out(row_to_dict(r), include_embedding=include_embedding) for r in rows]
+
+
+def get_memory_fact(fact_id: str, include_embedding: bool = False) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM memory_facts WHERE id = ?", (fact_id,)).fetchone()
+        return _memory_out(row_to_dict(row), include_embedding=include_embedding) if row else None
+
+
+def create_memory_fact(data: dict) -> dict:
+    fid = _new_id()
+    now = _utcnow()
+    emb = data.get("embedding")
+    emb_json = json.dumps(emb) if emb is not None else None
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO memory_facts (id, text, category, subject, source, pinned, embedding, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (fid, data["text"], data.get("category", "preferences"), data.get("subject", "family"),
+             data.get("source", "manual"), 1 if data.get("pinned") else 0, emb_json, now, now),
+        )
+        row = conn.execute("SELECT * FROM memory_facts WHERE id = ?", (fid,)).fetchone()
+        return _memory_out(row_to_dict(row))
+
+
+def update_memory_fact(fact_id: str, data: dict) -> Optional[dict]:
+    now = _utcnow()
+    sets, values = [], []
+    for key in ("text", "category", "subject", "source"):
+        if data.get(key) is not None:
+            sets.append(f"{key} = ?")
+            values.append(data[key])
+    if "pinned" in data and data["pinned"] is not None:
+        sets.append("pinned = ?")
+        values.append(1 if data["pinned"] else 0)
+    if "embedding" in data:
+        sets.append("embedding = ?")
+        values.append(json.dumps(data["embedding"]) if data["embedding"] is not None else None)
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM memory_facts WHERE id = ?", (fact_id,)).fetchone():
+            return None
+        if sets:
+            sets.append("updated_at = ?")
+            values.append(now)
+            values.append(fact_id)
+            conn.execute(f"UPDATE memory_facts SET {', '.join(sets)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM memory_facts WHERE id = ?", (fact_id,)).fetchone()
+        return _memory_out(row_to_dict(row))
+
+
+def touch_memory_facts(fact_ids: list[str]) -> None:
+    """Record that these facts were surfaced (for 'recently used' insight)."""
+    if not fact_ids:
+        return
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.executemany("UPDATE memory_facts SET last_used_at = ? WHERE id = ?", [(now, fid) for fid in fact_ids])
+
+
+def delete_memory_fact(fact_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM memory_facts WHERE id = ?", (fact_id,))
         return cur.rowcount > 0
 
 

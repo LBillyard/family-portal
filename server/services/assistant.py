@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -14,10 +15,27 @@ from server import database as db
 from server.services import openrouter
 from server.services import activity as activity_log
 from server.services import briefing as briefing_svc
+from server.services import memory as mem_svc
 from server.services import search as search_svc
 from server.services import trips as trips_svc
 
 logger = logging.getLogger(__name__)
+
+# Keep references to fire-and-forget capture tasks so they aren't GC'd mid-flight.
+_capture_tasks: set = set()
+
+
+def _schedule_capture(user_text: str, assistant_text: str) -> None:
+    """Extract + store durable family facts from this exchange, off the reply path
+    (adds no latency). Best-effort — a running event loop is required."""
+    if not mem_svc.is_enabled():
+        return
+    try:
+        task = asyncio.create_task(mem_svc.capture_from_exchange(user_text, assistant_text))
+        _capture_tasks.add(task)
+        task.add_done_callback(_capture_tasks.discard)
+    except RuntimeError:
+        pass  # no running loop (e.g. a sync test) — skip silently
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_HISTORY = 24
@@ -888,9 +906,15 @@ async def chat(user: dict, message: str, channel: str = "web") -> dict:
     history = get_history(user["id"], channel)
     history.append({"role": "user", "content": text})
 
-    system = f"{SYSTEM_PROMPT}\n\nContext JSON:\n{build_context(user)}"
-    if channel == "whatsapp":
-        system = f"{SYSTEM_PROMPT}{WHATSAPP_NOTE}\n\nContext JSON:\n{build_context(user)}"
+    # Pull the most relevant long-term memory for this question (empty if none).
+    memory_block = await mem_svc.recall_block(text)
+
+    base = f"{SYSTEM_PROMPT}{WHATSAPP_NOTE}" if channel == "whatsapp" else SYSTEM_PROMPT
+    sections = [base]
+    if memory_block:
+        sections.append(memory_block)
+    sections.append(f"Context JSON:\n{build_context(user)}")
+    system = "\n\n".join(sections)
     messages: list[dict] = [{"role": "system", "content": system}]
     for h in history:
         if h["role"] in ("user", "assistant") and h.get("content"):
@@ -938,6 +962,7 @@ async def chat(user: dict, message: str, channel: str = "web") -> dict:
         reply = (choice.get("content") or "").strip() or "Done."
         history.append({"role": "assistant", "content": reply})
         save_history(user["id"], history, channel)
+        _schedule_capture(text, reply)
         return {"reply": reply, "actions": actions, "data_changed": data_changed}
 
     reply = "I need to break this into smaller steps — what should we do first?"

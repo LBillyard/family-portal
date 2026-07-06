@@ -2642,6 +2642,33 @@ dialog select:focus {
 .budget-item { margin-bottom: 14px; }
 .savings-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .savings-head h4 { margin: 0; }
+
+/* Family memory */
+.memory-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; flex-wrap: wrap; }
+.memory-search {
+  flex: 1; min-width: 200px; padding: 9px 12px; border: 1px solid var(--border);
+  border-radius: 8px; font-family: var(--font); font-size: 0.9375rem; background: var(--surface);
+}
+.mem-group { margin-bottom: 22px; }
+.mem-group-title { font-size: 0.95rem; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; color: var(--navy-800); }
+.mem-count { font-size: 0.75rem; font-weight: 600; color: var(--muted); background: var(--surface-muted); border-radius: 999px; padding: 1px 8px; }
+.mem-fact {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); margin-bottom: 8px;
+}
+.mem-fact.editing { flex-direction: column; align-items: stretch; background: var(--surface-muted); }
+.mem-fact-main { min-width: 0; }
+.mem-fact-text { display: block; font-size: 0.9375rem; color: var(--navy-800); }
+.mem-fact-meta { display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+.mem-subject { font-size: 0.72rem; font-weight: 600; color: var(--muted); }
+.mem-badge {
+  font-size: 0.68rem; font-weight: 600; border-radius: 999px; padding: 1px 7px;
+  background: var(--surface-muted); color: var(--muted);
+}
+.mem-badge.auto { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
+.mem-badge.pinned { background: rgba(219, 119, 0, 0.12); color: #b45309; }
+.mem-fact-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .row-edit { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .row-edit .te-input {
   padding: 8px 10px; font-size: 0.9375rem; font-weight: 600; font-family: var(--font);

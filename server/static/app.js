@@ -2108,6 +2108,116 @@ async function openTripDetailModal(tripId) {
   }
 }
 
+const MEMORY_CATS = {
+  people: { label: 'People & family', icon: '👪' },
+  places: { label: 'Places', icon: '📍' },
+  preferences: { label: 'Likes & preferences', icon: '⭐' },
+  possessions: { label: 'Home, cars & things', icon: '🚗' },
+};
+const MEMORY_CAT_ORDER = ['people', 'places', 'preferences', 'possessions'];
+let memorySearchWired = false;
+
+function findMemory(id) {
+  return (store.memory?.facts || []).find((f) => String(f.id) === String(id));
+}
+
+function memorySubjectName(subject) {
+  if (!subject || subject === 'family') return 'Family';
+  const u = (store.dashboard?.users || store.memory?.subjects || []).find((x) => x.id === subject);
+  return u ? (u.name || subject) : subject;
+}
+
+function memorySubjectOptions(selected) {
+  const subs = store.memory?.subjects || [{ id: 'family', name: 'Family' }];
+  return subs.map((s) => `<option value="${esc(s.id)}"${s.id === selected ? ' selected' : ''}>${esc(s.name)}</option>`).join('');
+}
+
+function memoryCatOptions(selected) {
+  return MEMORY_CAT_ORDER.map((c) => `<option value="${c}"${c === selected ? ' selected' : ''}>${MEMORY_CATS[c].label}</option>`).join('');
+}
+
+function memoryFactInner(f) {
+  const src = f.source === 'auto'
+    ? '<span class="mem-badge auto" title="Learned from a conversation">✨ auto</span>'
+    : '<span class="mem-badge manual" title="You added this">✍ added</span>';
+  const pin = f.pinned
+    ? '<span class="mem-badge pinned" title="Pinned — always considered">📌 pinned</span>'
+    : '';
+  return `
+    <div class="mem-fact-main">
+      <span class="mem-fact-text">${esc(f.text)}</span>
+      <div class="mem-fact-meta"><span class="mem-subject">${esc(memorySubjectName(f.subject))}</span>${src}${pin}</div>
+    </div>
+    <div class="mem-fact-actions">
+      <button type="button" class="bill-edit-btn wf-action" data-action="toggle-pin-memory" data-mem-id="${f.id}" title="${f.pinned ? 'Unpin' : 'Pin — always consider this'}">${f.pinned ? '📌' : '📎'}</button>
+      <button type="button" class="bill-edit-btn wf-action" data-action="edit-memory" data-mem-id="${f.id}" title="Edit">✎</button>
+      <button type="button" class="bill-edit-btn wf-action" data-action="delete-memory" data-mem-id="${f.id}" title="Forget">🗑</button>
+    </div>`;
+}
+
+function memoryEditInner(f) {
+  return `
+    <div class="row-edit" data-mem-id="${f.id}">
+      <input type="text" class="te-input" data-f="text" value="${esc(f.text)}">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${memoryCatOptions(f.category)}</select></label>
+        <label>About<select data-f="subject">${memorySubjectOptions(f.subject)}</select></label>
+        <label class="row-edit-check"><input type="checkbox" data-f="pinned"${f.pinned ? ' checked' : ''}> Always consider (pin)</label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-memory-inline" data-mem-id="${f.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-memory-inline" data-mem-id="${f.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-memory" data-mem-id="${f.id}" style="margin-left:auto">Forget</button>
+      </div>
+    </div>`;
+}
+
+function memoryAddInner() {
+  return `
+    <div class="row-edit mem-add" id="memory-add-form">
+      <input type="text" class="te-input" data-f="text" placeholder="e.g. We have a dog called Bella">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${memoryCatOptions('preferences')}</select></label>
+        <label>About<select data-f="subject">${memorySubjectOptions('family')}</select></label>
+        <label class="row-edit-check"><input type="checkbox" data-f="pinned"> Always consider (pin)</label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-memory-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="memory-content">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderMemory(data) {
+  const el = document.getElementById('memory-content');
+  if (!el) return;
+  if (!data.enabled) {
+    el.innerHTML = '<p class="hint-small">Memory needs OpenRouter — set OPENROUTER_API_KEY to switch it on.</p>';
+    return;
+  }
+  const q = (document.getElementById('memory-search')?.value || '').toLowerCase().trim();
+  let facts = data.facts || [];
+  if (q) {
+    facts = facts.filter((f) => f.text.toLowerCase().includes(q) || memorySubjectName(f.subject).toLowerCase().includes(q));
+  }
+  if (!facts.length) {
+    el.innerHTML = q
+      ? '<p class="hint-small">No memories match your search.</p>'
+      : '<p class="hint-small">Nothing remembered yet. Add facts here, or just chat with the assistant — it learns as you go.</p>';
+  } else {
+    el.innerHTML = MEMORY_CAT_ORDER.map((cat) => {
+      const items = facts.filter((f) => (MEMORY_CATS[f.category] ? f.category : 'preferences') === cat);
+      if (!items.length) return '';
+      const rows = items.map((f) => `<div class="mem-fact" data-mem-id="${f.id}">${memoryFactInner(f)}</div>`).join('');
+      return `<div class="mem-group"><h3 class="mem-group-title">${MEMORY_CATS[cat].icon} ${MEMORY_CATS[cat].label} <span class="mem-count">${items.length}</span></h3>${rows}</div>`;
+    }).join('');
+  }
+  if (!memorySearchWired) {
+    const s = document.getElementById('memory-search');
+    if (s) { s.addEventListener('input', () => renderMemory(store.memory || { enabled: true, facts: [] })); memorySearchWired = true; }
+  }
+}
+
 function renderSettings(data) {
   const { users, sync = {}, notification_log = [], integrations = {}, google_accounts = [] } = data;
   const googleOk = integrations.google_calendar;
@@ -2968,6 +3078,63 @@ function initActions() {
       load();
       return;
     }
+    if (action === 'add-memory') {
+      const host = document.getElementById('memory-content');
+      if (host && !document.getElementById('memory-add-form')) {
+        host.insertAdjacentHTML('afterbegin', memoryAddInner());
+        document.querySelector('#memory-add-form [data-f="text"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-memory-new') {
+      const f = readInlineFields(document.getElementById('memory-add-form'));
+      if (!f.text || !f.text.trim()) { showToast('Type something to remember', true); return; }
+      btn.disabled = true;
+      api('/memory', {
+        method: 'POST',
+        body: JSON.stringify({ text: f.text.trim(), category: f.category, subject: f.subject, pinned: !!f.pinned }),
+      }).then(() => load()).then(() => showToast('Added to memory'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-memory') {
+      const row = btn.closest('.mem-fact');
+      const f = findMemory(btn.dataset.memId);
+      if (row && f) { row.classList.add('editing'); row.innerHTML = memoryEditInner(f); row.querySelector('[data-f="text"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-memory-inline') {
+      const row = btn.closest('.mem-fact');
+      const f = readInlineFields(row);
+      if (!f.text || !f.text.trim()) { showToast('Memory text can’t be empty', true); return; }
+      btn.disabled = true;
+      api(`/memory/${btn.dataset.memId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ text: f.text.trim(), category: f.category, subject: f.subject, pinned: !!f.pinned }),
+      }).then(() => load()).then(() => showToast('Memory updated'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'cancel-memory-inline') {
+      const row = btn.closest('.mem-fact');
+      const f = findMemory(btn.dataset.memId);
+      if (row && f) { row.classList.remove('editing'); row.innerHTML = memoryFactInner(f); }
+      return;
+    }
+    if (action === 'toggle-pin-memory') {
+      const f = findMemory(btn.dataset.memId);
+      api(`/memory/${btn.dataset.memId}`, { method: 'PATCH', body: JSON.stringify({ pinned: !(f && f.pinned) }) })
+        .then(() => load()).then(() => showToast(f && f.pinned ? 'Unpinned' : 'Pinned — always considered'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'delete-memory') {
+      if (!confirm('Forget this memory?')) return;
+      api(`/memory/${btn.dataset.memId}`, { method: 'DELETE' })
+        .then(() => load()).then(() => showToast('Forgotten'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
     if (action === 'view-trip') {
       const tripId = btn.dataset.tripId;
       if (tripId) openTripDetailModal(tripId);
@@ -3677,6 +3844,7 @@ const SECTION_CONTAINERS = {
   activity: ['activity-feed'],
   renewals: ['renewal-stats', 'renewal-timeline'],
   maintenance: ['maintenance-list'],
+  memory: ['memory-content'],
 };
 
 function markSectionFailed(key) {
@@ -3702,7 +3870,7 @@ async function load() {
 
   loadWeather();  // refresh header forecast (also picks up holiday-location changes)
 
-  const keys = ['dashboard', 'calendar', 'finances', 'appointments', 'holidays', 'documents', 'media', 'subscriptions', 'settings', 'briefing', 'activity', 'renewals', 'maintenance'];
+  const keys = ['dashboard', 'calendar', 'finances', 'appointments', 'holidays', 'documents', 'media', 'subscriptions', 'settings', 'briefing', 'activity', 'renewals', 'maintenance', 'memory'];
   const results = await Promise.allSettled(keys.map((k) => api(`/${k}`)));
 
   store = {};
@@ -3712,7 +3880,7 @@ async function load() {
     else failed.push(keys[i]);
   });
 
-  const { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance } = store;
+  const { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance, memory } = store;
 
   renderActionGrid();
   if (dashboard) {
@@ -3733,6 +3901,7 @@ async function load() {
   if (media) renderMedia(media);
   if (subscriptions) renderSubscriptions(subscriptions);
   if (documents) renderDocuments(documents);
+  if (memory) renderMemory(memory);
   if (settings) renderSettings(settings);
 
   failed.forEach(markSectionFailed);

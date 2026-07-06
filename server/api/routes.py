@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from server import auth, database as db
 from server.services import csv_import, dashboard as dash, documents as doc_files, google_calendar, openrouter, open_banking
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
+from server.services import memory as mem_svc
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
@@ -45,6 +46,8 @@ from shared.schemas import (
     MaintenanceUpdate,
     MediaUpdate,
     MemberUpdate,
+    MemoryCreate,
+    MemoryUpdate,
     SavingsGoalCreate,
     SavingsGoalUpdate,
     SearchQuery,
@@ -661,6 +664,51 @@ def update_savings_goal_route(goal_id: str, body: SavingsGoalUpdate, _: dict = D
 def delete_savings_goal_route(goal_id: str, _: dict = Depends(require_user)):
     if not db.delete_savings_goal(goal_id):
         raise HTTPException(status_code=404, detail="Savings goal not found")
+    return {"ok": True}
+
+
+# --- Family memory (RAG) ---
+
+@router.get("/memory")
+def api_memory(_: dict = Depends(require_user)):
+    return {
+        "facts": db.list_memory_facts(include_embedding=False),
+        "categories": mem_svc.CATEGORIES,
+        "enabled": mem_svc.is_enabled(),
+        "subjects": [{"id": "family", "name": "Family"}]
+        + [{"id": u["id"], "name": u["name"]} for u in db.list_users()],
+    }
+
+
+@router.post("/memory")
+async def create_memory(body: MemoryCreate, user: dict = Depends(require_user)):
+    if not mem_svc.is_enabled():
+        raise HTTPException(status_code=503, detail="Memory needs OpenRouter — set OPENROUTER_API_KEY.")
+    try:
+        fact = await mem_svc.add_manual(body.text, body.category, body.subject, body.pinned)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not save memory: {exc}") from exc
+    if not fact:
+        raise HTTPException(status_code=400, detail="Empty fact")
+    activity_svc.log(user, "created", "memory", f"Remembered: {body.text[:60]}")
+    return fact
+
+
+@router.patch("/memory/{fact_id}")
+async def update_memory(fact_id: str, body: MemoryUpdate, _: dict = Depends(require_user)):
+    try:
+        fact = await mem_svc.edit(fact_id, body.model_dump(exclude_unset=True))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not update memory: {exc}") from exc
+    if not fact:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return fact
+
+
+@router.delete("/memory/{fact_id}")
+def delete_memory(fact_id: str, _: dict = Depends(require_user)):
+    if not db.delete_memory_fact(fact_id):
+        raise HTTPException(status_code=404, detail="Memory not found")
     return {"ok": True}
 
 
