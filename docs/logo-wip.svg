@@ -1,0 +1,26 @@
+<!-- WORK IN PROGRESS — The Hub squirrel logo (SVG recreation).
+     Draft 3: reads as a sitting animal with ear/eye/snout inside the squircle ring,
+     but the tail still needs to be bushier/more prominent to read unmistakably as a
+     squirrel. Next steps: fatten + lengthen the tail plume, then wire this mark into
+     the header brand-mark in server/static/index.html and rasterise to
+     icon-192.png / icon-512.png (navy #0f1d32 background) via the browser
+     (cairosvg has no native lib on Windows; use Playwright screenshot at 512px). -->
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7fe3da"/>
+      <stop offset="1" stop-color="#1a8f88"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="168" height="168" rx="54" ry="54" fill="none" stroke="url(#g)" stroke-width="11"/>
+  <g fill="url(#g)">
+    <path d="M96 164 C60 168 40 150 42 116 C43 92 54 68 78 58 C64 74 60 100 72 120 C60 96 70 66 98 60 C120 56 134 74 130 96 C127 112 114 120 102 112 C114 122 118 132 116 150 C114 160 106 164 96 164 Z"/>
+    <path d="M100 166 C92 140 94 108 110 90 C118 80 122 70 126 64 C138 70 148 88 148 112 C148 138 136 158 116 164 C110 166 104 168 100 166 Z"/>
+    <path d="M112 158 C120 156 132 158 136 166 C130 170 118 170 110 166 Z"/>
+    <path d="M128 108 C122 110 118 116 121 122 C126 120 130 116 132 110 Z"/>
+    <circle cx="130" cy="66" r="19"/>
+    <path d="M123 50 C118 37 125 29 135 33 C131 39 128 46 129 54 Z"/>
+    <path d="M147 66 C155 65 158 71 154 76 C151 74 149 72 146 71 Z"/>
+  </g>
+  <circle cx="136" cy="62" r="3.1" fill="#0f1d32"/>
+</svg>

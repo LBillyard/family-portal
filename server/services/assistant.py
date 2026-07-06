@@ -387,6 +387,33 @@ def _resolve_user(for_user: str | None, default_id: str) -> str:
     return default_id
 
 
+async def notify_task_assignee(task: dict, sender: dict) -> None:
+    """If a task is assigned to the *other* household member, ping them on WhatsApp
+    so both people have visibility. Best-effort: never breaks task creation, and a
+    free-form message only delivers if the assignee has an open 24h window."""
+    assignee_id = task.get("assignee")
+    if not assignee_id or assignee_id == sender.get("id"):
+        return
+    try:
+        from server.services import whatsapp
+
+        if not whatsapp.is_configured():
+            return
+        assignee = db.get_user(assignee_id)
+        phone = (assignee or {}).get("phone")
+        if not phone:
+            return
+        parts = [f"📋 {sender.get('name', 'Someone')} added a task for you: {task['title']}"]
+        if task.get("due"):
+            parts.append(f"due {task['due']}")
+        if task.get("priority") and task["priority"] != "medium":
+            parts.append(f"{task['priority']} priority")
+        await whatsapp.send_text(phone, " · ".join(parts))
+        logger.info("Notified %s of task assigned by %s", assignee_id, sender.get("id"))
+    except Exception as exc:
+        logger.warning("Task-assignee WhatsApp notify failed: %s", exc)
+
+
 def _resolve_assignee(name: str | None) -> str | None:
     if not name or name in ("either", "both"):
         return None
@@ -519,6 +546,7 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                     "priority": args.get("priority", "medium"),
                 }
             )
+            await notify_task_assignee(task, user)
             return {"ok": True, "task": task}
         if name == "mark_task_done":
             tasks = db.list_tasks()

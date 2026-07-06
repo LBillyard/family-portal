@@ -980,12 +980,14 @@ def api_tasks(_: dict = Depends(require_user)):
 
 
 @router.post("/tasks")
-def create_task(body: TaskCreate, _: dict = Depends(require_user)):
+async def create_task(body: TaskCreate, user: dict = Depends(require_user)):
     assignee = body.assignee_id
     if assignee and assignee not in ("luke", "partner"):
         name_map = {u["name"].lower(): u["id"] for u in db.list_users()}
         assignee = name_map.get(assignee.lower(), assignee)
-    return db.create_task({**body.model_dump(), "assignee_id": assignee})
+    task = db.create_task({**body.model_dump(), "assignee_id": assignee})
+    await ai_assistant.notify_task_assignee(task, user)  # ping the other person if it's theirs
+    return task
 
 
 @router.patch("/tasks/{task_id}")

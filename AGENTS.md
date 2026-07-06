@@ -12,8 +12,9 @@ This file is the **primary handoff document** for Claude, Cursor, or other AI ag
 | Stack | FastAPI + SQLite + vanilla HTML/CSS/JS (no frontend build) |
 | Port | **8090** |
 | Theme | Navy `#0f1d32` + teal `#00a89e` (matches Pokemon scraper aesthetic) |
-| Auth | Session cookies, PBKDF2-SHA256 passwords |
-| Data | `data/family.db` (gitignored), uploads in `data/uploads/` |
+| Auth | Session cookies; argon2id passwords (PBKDF2 fallback, auto-upgrades on login) |
+| Data | `data/family.db` (gitignored; override path with `FAMILY_PORTAL_DB`), uploads in `data/uploads/` |
+| Tests | `pytest` (see `tests/`, `requirements-dev.txt`) |
 
 ## Quick start (local)
 
@@ -46,17 +47,24 @@ family-portal/
 │   │   ├── assistant.py   ← AI chat + OpenRouter tool calling
 │   │   ├── dashboard.py   ← Home tab aggregation
 │   │   ├── documents.py   ← Vault file helpers
-│   │   ├── google_calendar.py
+│   │   ├── google_calendar.py  ← calendar sync + write-back; SCOPES incl. gmail.readonly
+│   │   ├── gmail_receipts.py    ← scan inbox for receipts → OCR drafts
 │   │   ├── open_banking.py  ← TrueLayer (Starling, Revolut, Amex, Virgin)
+│   │   ├── weather.py       ← Open-Meteo forecast + holiday-aware location
 │   │   ├── openrouter.py    ← Holiday ideas + model allowlist
+│   │   ├── receipts.py      ← OpenRouter vision receipt OCR
 │   │   └── csv_import.py
+│   ├── jobs/
+│   │   ├── morning_digest.py  ← 07:00 WhatsApp digest (systemd timer)
+│   │   └── auto_sync.py       ← hourly Google + bank sync (systemd timer)
 │   └── static/
 │       ├── index.html     ← Single-page shell
 │       ├── app.js         ← Tab UI, API client, AI chat panel
 │       └── style.css
 ├── shared/schemas.py      ← Pydantic request models
-├── deploy/                ← systemd, CloudFormation, install scripts
-├── requirements.txt
+├── tests/                 ← pytest suite (isolated DB via FAMILY_PORTAL_DB)
+├── deploy/                ← systemd units, CloudFormation, install scripts
+├── requirements.txt / requirements-dev.txt
 └── .env.example           ← Template only — no real secrets
 ```
 
