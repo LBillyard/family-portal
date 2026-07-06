@@ -11,11 +11,14 @@ import re
 import httpx
 
 from server import database as db
-from server.services import openrouter
+from server.services import categorize, openrouter
 
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Receipts are always spend — offer the canonical spend categories only.
+RECEIPT_CATEGORIES = [c for c in categorize.CATEGORIES if c not in categorize.NON_SPEND_CATEGORIES]
 
 
 async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
@@ -27,8 +30,8 @@ async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> di
     system = (
         "Extract UK receipt data. Respond with ONLY valid JSON: "
         '{"description":str,"amount":number,"date":"YYYY-MM-DD","category":str,"merchant":str}. '
-        "Amount should be positive total paid. Category one of: Groceries, Eating out, Transport, "
-        "Shopping, Entertainment, Utilities, Subscriptions, Other."
+        "Amount should be positive total paid. Category one of: "
+        + ", ".join(RECEIPT_CATEGORIES) + "."
     )
     payload = {
         "model": model,
@@ -60,17 +63,23 @@ async def parse_receipt(image_bytes: bytes, mime_type: str = "image/jpeg") -> di
     amount = float(parsed.get("amount") or 0)
     if amount > 0:
         amount = -abs(amount)
+    category = parsed.get("category")
+    if category not in RECEIPT_CATEGORIES:
+        category = "Other"
     return {
         "description": parsed.get("description") or parsed.get("merchant") or "Receipt expense",
         "amount": round(amount, 2),
         "date": parsed.get("date") or "",
-        "category": parsed.get("category") or "Other",
+        "category": category,
         "merchant": parsed.get("merchant", ""),
         "raw": parsed,
     }
 
 
-async def scan_and_log_transaction(image_bytes: bytes, mime_type: str, user: dict, account_id: str = "joint") -> dict:
+async def scan_and_log_transaction(image_bytes: bytes, mime_type: str, user: dict, account_id: str | None = None) -> dict:
+    resolved = db.resolve_account_id(account_id)
+    if not resolved:
+        raise RuntimeError("No account to log against yet — connect a bank first.")
     extracted = await parse_receipt(image_bytes, mime_type)
     txn = db.create_transaction(
         {
@@ -78,7 +87,7 @@ async def scan_and_log_transaction(image_bytes: bytes, mime_type: str, user: dic
             "amount": extracted["amount"],
             "category": extracted["category"],
             "date": extracted["date"] or None,
-            "account_id": account_id,
+            "account_id": resolved,
         }
     )
     receipt = db.create_receipt(

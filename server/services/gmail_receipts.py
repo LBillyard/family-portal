@@ -55,10 +55,15 @@ def _image_attachments(payload: dict) -> list[tuple[str, str]]:
     return out
 
 
-async def scan_account(account_internal: dict, limit: int = MAX_MESSAGES) -> list[dict]:
-    """Return draft expenses parsed from receipt emails in one Google account."""
+async def scan_account(account_internal: dict, limit: int = MAX_MESSAGES,
+                       already_imported: set[str] | None = None) -> list[dict]:
+    """Return draft expenses parsed from receipt emails in one Google account.
+
+    Messages already imported (external_id 'gmail:<id>' present in the ledger) are
+    skipped so a re-scan never surfaces the same receipt twice."""
     from googleapiclient.errors import HttpError
 
+    already_imported = already_imported or set()
     try:
         svc = _gmail(account_internal["token_json"])
         listing = svc.users().messages().list(userId="me", q=QUERY, maxResults=limit).execute()
@@ -70,6 +75,8 @@ async def scan_account(account_internal: dict, limit: int = MAX_MESSAGES) -> lis
     drafts: list[dict] = []
     for msg in listing.get("messages", []):
         mid = msg["id"]
+        if f"gmail:{mid}" in already_imported:
+            continue  # already in the ledger from a previous scan
         try:
             full = svc.users().messages().get(userId="me", id=mid, format="full").execute()
         except Exception:
@@ -102,6 +109,7 @@ async def scan_account(account_internal: dict, limit: int = MAX_MESSAGES) -> lis
 async def scan_for_user(user_id: str, limit: int = MAX_MESSAGES) -> dict:
     """Scan all of a user's connected Google accounts. Returns drafts + status."""
     accounts = db.list_google_accounts(user_id)
+    already_imported = db.existing_external_ids("gmail:")
     drafts: list[dict] = []
     needs_reconnect: list[str] = []
     for pub in accounts:
@@ -109,7 +117,7 @@ async def scan_for_user(user_id: str, limit: int = MAX_MESSAGES) -> dict:
         if not acct:
             continue
         try:
-            drafts.extend(await scan_account(acct, limit=limit))
+            drafts.extend(await scan_account(acct, limit=limit, already_imported=already_imported))
         except NeedsReconnect as exc:
             needs_reconnect.append(str(exc))
         except Exception:
@@ -117,21 +125,29 @@ async def scan_for_user(user_id: str, limit: int = MAX_MESSAGES) -> dict:
     return {"drafts": drafts, "needs_reconnect": needs_reconnect, "scanned_accounts": len(accounts)}
 
 
-def commit_drafts(drafts: list[dict], user: dict, account_id: str = "joint") -> list[dict]:
+def commit_drafts(drafts: list[dict], user: dict, account_id: str | None = None) -> list[dict]:
     """Insert reviewed drafts into the ledger as transactions (+ receipt records)."""
     import json as _json
 
+    resolved = db.resolve_account_id(account_id)
+    if not resolved:
+        logger.warning("Email-receipt import skipped — no account to log against yet (connect a bank first)")
+        return []
     created = []
     for d in drafts:
         amount = float(d.get("amount") or 0)
         if amount > 0:
             amount = -abs(amount)
+        mid = d.get("message_id")
         txn = db.create_transaction({
             "description": d.get("description") or d.get("merchant") or "Email receipt",
             "amount": round(amount, 2),
             "category": d.get("category") or "Other",
             "date": d.get("date") or None,
-            "account_id": account_id,
+            "account_id": resolved,
+            # Idempotency key: committing the same email twice returns the existing
+            # row instead of duplicating the expense and double-deducting balance.
+            "external_id": f"gmail:{mid}" if mid else None,
         })
         db.create_receipt({
             "transaction_id": txn["id"],

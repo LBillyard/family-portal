@@ -8,8 +8,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
   <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" href="/static/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
   <meta name="theme-color" content="#0f1d32">
-  <link rel="stylesheet" href="/static/style.css?v=31">
+  <link rel="stylesheet" href="/static/style.css?v=32">
 </head>
 <body>
   <header class="site-header">
@@ -127,7 +129,7 @@
           <div class="card">
             <div class="card-header-row">
               <div class="card-header"><h3>This week</h3><p>Google Calendar + portal events</p></div>
-              <button class="card-link-btn wf-action" data-action="add-event">+ Add</button>
+              <button class="card-link-btn wf-action" data-action="add-event" data-modal="add-event">+ Add</button>
             </div>
             <div id="home-events"></div>
           </div>
@@ -137,7 +139,7 @@
               <div class="card-header"><h3>Shared tasks</h3><p>Household to-do list</p></div>
               <div style="display:flex;gap:8px">
                 <button class="card-link-btn wf-action" data-action="view-all-tasks">View all</button>
-                <button class="card-link-btn wf-action" data-action="add-task">+ Task</button>
+                <button class="card-link-btn wf-action" data-action="add-task" data-modal="add-task">+ Task</button>
               </div>
             </div>
             <div id="home-tasks"></div>
@@ -176,7 +178,7 @@
           </div>
 
           <div class="card span-2">
-            <div class="card-header"><h3>Monthly finances</h3><p>Income vs spending · July 2026</p></div>
+            <div class="card-header"><h3>Monthly finances</h3><p id="home-finance-sub">Income vs spending</p></div>
             <div id="home-finance"></div>
           </div>
 
@@ -634,6 +636,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=31"></script>
+  <script src="/static/app.js?v=32"></script>
 </body>
 </html>

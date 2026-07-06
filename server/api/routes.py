@@ -30,17 +30,23 @@ from shared.schemas import (
     BillCreate,
     BillLock,
     BillUpdate,
+    BudgetCreate,
+    BudgetUpdate,
     ChangePasswordRequest,
+    ChecklistToggleRequest,
     TransactionCategoryUpdate,
     DocumentCreate,
     EmailReceiptImport,
     EventCreate,
+    EventUpdate,
     HolidayIdeaRequest,
     LoginRequest,
     MaintenanceCreate,
     MaintenanceUpdate,
     MediaUpdate,
     MemberUpdate,
+    SavingsGoalCreate,
+    SavingsGoalUpdate,
     SearchQuery,
     SubscriptionUpdate,
     TaskCreate,
@@ -220,6 +226,10 @@ def whatsapp_verify(request: Request):
 @router.post("/whatsapp/webhook")
 async def whatsapp_receive(request: Request):
     """Inbound messages from Meta (public, verified by signature + number allowlist)."""
+    # Only accept the ACTIVE provider's webhook, and never without a signing secret —
+    # otherwise anyone could POST forged payloads at the inactive endpoint.
+    if whatsapp_svc.provider() != "meta" or not os.environ.get("WHATSAPP_APP_SECRET", "").strip():
+        raise HTTPException(status_code=403, detail="Webhook not enabled")
     raw = await request.body()
     if not whatsapp_meta.verify_signature(raw, request.headers.get("X-Hub-Signature-256")):
         raise HTTPException(status_code=403, detail="Bad signature")
@@ -237,6 +247,8 @@ async def whatsapp_receive(request: Request):
 @router.post("/whatsapp/twilio")
 async def whatsapp_twilio_receive(request: Request):
     """Inbound messages from Twilio (public, form-encoded, X-Twilio-Signature verified)."""
+    if whatsapp_svc.provider() != "twilio":
+        raise HTTPException(status_code=403, detail="Webhook not enabled")
     form = dict((await request.form()))
     url = os.environ.get("PUBLIC_URL", "").rstrip("/") + "/api/whatsapp/twilio"
     if not whatsapp_twilio.validate_request(url, form, request.headers.get("X-Twilio-Signature")):
@@ -398,6 +410,9 @@ async def banking_sync(_: dict = Depends(require_user)):
         try:
             synced = await open_banking.sync_connection(internal, db)
             results.append({"provider": conn["provider_name"], **synced})
+        except RuntimeError as exc:  # expired consent/tokens — surface as needs_reauth
+            db.set_connection_status(conn["id"], "needs_reauth")
+            results.append({"provider": conn["provider_name"], "error": str(exc)})
         except Exception as exc:
             results.append({"provider": conn["provider_name"], "error": str(exc)})
     sub_svc.refresh_subscriptions()
@@ -428,6 +443,8 @@ def api_calendar(_: dict = Depends(require_user)):
 
 @router.post("/events")
 def create_event(body: EventCreate, user: dict = Depends(require_user)):
+    if body.user_id and body.user_id not in {u["id"] for u in db.list_users()}:
+        raise HTTPException(status_code=400, detail="Unknown household member")
     end = body.end or body.start
     all_day = body.all_day or (len(body.start) == 10)
     uid = body.user_id or user["id"]
@@ -444,11 +461,37 @@ def create_event(body: EventCreate, user: dict = Depends(require_user)):
     )
     if google_calendar.is_configured():
         try:
-            google_calendar.push_event_to_google(uid, event, account_id=body.google_account_id)
+            gid = google_calendar.push_event_to_google(uid, event, account_id=body.google_account_id)
+            if gid:
+                db.set_event_google_written(event["id"], gid)  # sync must skip it (no dupes)
         except Exception as exc:
             logger.warning("Google write-back failed: %s", exc)
     activity_svc.log(user, "created", "event", f"Added event: {body.title}", entity_id=event["id"])
     return event
+
+
+@router.patch("/events/{event_id}")
+def update_event_route(event_id: str, body: EventUpdate, user: dict = Depends(require_user)):
+    existing = db.get_event(event_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if existing.get("source") == "google" or existing.get("google_account_id"):
+        raise HTTPException(status_code=400, detail="Google events can't be edited here — change them in Google Calendar")
+    event = db.update_event(event_id, body.model_dump(exclude_unset=True))
+    activity_svc.log(user, "updated", "event", f"Updated event: {event['title']}", entity_id=event_id)
+    return event
+
+
+@router.delete("/events/{event_id}")
+def delete_event_route(event_id: str, user: dict = Depends(require_user)):
+    existing = db.get_event(event_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if existing.get("source") == "google" or existing.get("google_account_id"):
+        raise HTTPException(status_code=400, detail="Google events can't be deleted here — remove them in Google Calendar")
+    db.delete_event(event_id)
+    activity_svc.log(user, "deleted", "event", f"Removed event: {existing['title']}", entity_id=event_id)
+    return {"ok": True}
 
 
 # --- Finances ---
@@ -456,7 +499,8 @@ def create_event(body: EventCreate, user: dict = Depends(require_user)):
 @router.get("/finances")
 def api_finances(_: dict = Depends(require_user)):
     merged = finance_merge.build_merged_recurring()  # links matched bills → subscriptions
-    db.reconcile_locked_bills()  # auto-mark locked bills paid/unpaid from bank payments
+    if db.reconcile_locked_bills():  # auto-mark locked bills paid/unpaid from bank payments
+        merged = finance_merge.build_merged_recurring()  # bills changed — rebuild so both views agree
     return {
         "bills": db.list_bills(),
         "transactions": db.list_transactions(),
@@ -576,18 +620,56 @@ def unlock_bill(bill_id: str, _: dict = Depends(require_user)):
     return bill
 
 
+@router.post("/budgets")
+def create_budget_route(body: BudgetCreate, user: dict = Depends(require_user)):
+    budget = db.create_budget(body.category, body.monthly_limit)
+    activity_svc.log(user, "created", "budget", f"Set budget for {body.category}")
+    return budget
+
+
+@router.patch("/budgets/{category}")
+def update_budget_route(category: str, body: BudgetUpdate, _: dict = Depends(require_user)):
+    budget = db.update_budget(category, body.monthly_limit)
+    if not budget:
+        raise HTTPException(status_code=404, detail="Budget not found")
+    return budget
+
+
+@router.delete("/budgets/{category}")
+def delete_budget_route(category: str, _: dict = Depends(require_user)):
+    if not db.delete_budget(category):
+        raise HTTPException(status_code=404, detail="Budget not found")
+    return {"ok": True}
+
+
+@router.post("/savings-goals")
+def create_savings_goal_route(body: SavingsGoalCreate, user: dict = Depends(require_user)):
+    goal = db.create_savings_goal(body.model_dump())
+    activity_svc.log(user, "created", "savings", f"Added savings goal: {body.name}")
+    return goal
+
+
+@router.patch("/savings-goals/{goal_id}")
+def update_savings_goal_route(goal_id: str, body: SavingsGoalUpdate, _: dict = Depends(require_user)):
+    goal = db.update_savings_goal(goal_id, body.model_dump(exclude_unset=True))
+    if not goal:
+        raise HTTPException(status_code=404, detail="Savings goal not found")
+    return goal
+
+
+@router.delete("/savings-goals/{goal_id}")
+def delete_savings_goal_route(goal_id: str, _: dict = Depends(require_user)):
+    if not db.delete_savings_goal(goal_id):
+        raise HTTPException(status_code=404, detail="Savings goal not found")
+    return {"ok": True}
+
+
 @router.post("/transactions")
 def create_transaction(body: TransactionCreate, _: dict = Depends(require_user)):
-    accounts = db.list_accounts()
-    if not accounts:
-        raise HTTPException(status_code=400, detail="No account to log against yet — connect a bank or import a CSV first.")
-    by_name = {a["name"]: a["id"] for a in accounts}
-    valid_ids = {a["id"] for a in accounts}
-    default_id = next((a["id"] for a in accounts if a["type"] == "current"), accounts[0]["id"])
     # Resolve to a REAL account id: accept a valid id, else map a name, else default.
-    account_id = body.account_id
-    if not account_id or account_id not in valid_ids:
-        account_id = by_name.get(account_id or "", default_id)
+    account_id = db.resolve_account_id(body.account_id)
+    if not account_id:
+        raise HTTPException(status_code=400, detail="No account to log against yet — connect a bank or import a CSV first.")
     amount = body.amount
     if body.category != "Income" and amount > 0:
         amount = -abs(amount)
@@ -610,15 +692,16 @@ CSV_MAX_BYTES = 5 * 1024 * 1024
 @router.post("/finances/import-csv")
 async def import_csv(
     file: UploadFile = File(...),
-    account: str = "joint",
+    account: str = "",
     _: dict = Depends(require_user),
 ):
     raw = await file.read()
     if len(raw) > CSV_MAX_BYTES:
         raise HTTPException(status_code=400, detail="CSV file too large (max 5 MB)")
     content = raw.decode("utf-8-sig", errors="replace")
+    account_id = db.resolve_account_id(account or None)  # may be None: rows import unattached
     try:
-        rows = csv_import.parse_csv(content, default_account=account)
+        rows = csv_import.parse_csv(content, default_account=account_id)
         count = db.import_transactions(rows)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -635,12 +718,10 @@ def transfer_funds(body: TransferCreate, user: dict = Depends(require_user)):
         raise HTTPException(status_code=400, detail="Unknown account")
     if src == dst:
         raise HTTPException(status_code=400, detail="Choose two different accounts")
-    amount = abs(body.amount)
     note = body.note or "Transfer"
-    db.create_transaction({"description": f"{note} → {accounts[dst]['name']}", "amount": -amount, "category": "Transfer", "account_id": src, "date": body.date})
-    db.create_transaction({"description": f"{note} ← {accounts[src]['name']}", "amount": amount, "category": "Transfer", "account_id": dst, "date": body.date})
-    activity_svc.log(user, "created", "transaction", f"Transfer £{amount:.2f}: {accounts[src]['name']} → {accounts[dst]['name']}")
-    return {"ok": True, "from": accounts[src]["name"], "to": accounts[dst]["name"], "amount": amount}
+    result = db.create_transfer(src, dst, body.amount, note, body.date)  # atomic: both legs or neither
+    activity_svc.log(user, "created", "transaction", f"Transfer £{result['amount']:.2f}: {result['from']} → {result['to']}")
+    return result
 
 
 def _csv_safe(value) -> str:
@@ -695,7 +776,7 @@ def patch_subscription(sub_id: str, body: SubscriptionUpdate, _: dict = Depends(
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription not found")
     all_items = db.list_subscriptions(include_ignored=True)
-    visible = [s for s in all_items if s["status"] != "ignored"]
+    visible = [s for s in all_items if s["status"] not in ("ignored", "lapsed")]
     return {
         "subscription": sub,
         "summary": sub_svc.build_summary(all_items),
@@ -712,6 +793,8 @@ def api_appointments(_: dict = Depends(require_user)):
 
 @router.post("/appointments")
 def create_appointment(body: AppointmentCreate, user: dict = Depends(require_user)):
+    if body.user_id and body.user_id not in {u["id"] for u in db.list_users()}:
+        raise HTTPException(status_code=400, detail="Unknown household member")
     return db.create_appointment(body.model_dump(), user["id"])
 
 
@@ -760,7 +843,9 @@ def sync_appointments_to_calendar(user: dict = Depends(require_user)):
         )
         if google_calendar.is_configured():
             try:
-                google_calendar.push_event_to_google(a["user_id"], event)
+                gid = google_calendar.push_event_to_google(a["user_id"], event)
+                if gid:
+                    db.set_event_google_written(event["id"], gid)  # sync must skip it (no dupes)
             except Exception:
                 pass
         created += 1
@@ -787,6 +872,28 @@ def update_trip(trip_id: str, body: TripUpdate, user: dict = Depends(require_use
         raise HTTPException(status_code=404, detail="Trip not found")
     activity_svc.log(user, "updated", "trip", f"Updated trip: {trip['title']}", entity_id=trip_id)
     return trip
+
+
+@router.delete("/holidays/trips/{trip_id}")
+def delete_trip_route(trip_id: str, user: dict = Depends(require_user)):
+    trip = next((t for t in db.list_trips() if t["id"] == trip_id), None)
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    db.delete_trip(trip_id)
+    activity_svc.log(user, "deleted", "trip", f"Removed trip: {trip['title']}", entity_id=trip_id)
+    return {"ok": True}
+
+
+@router.post("/holidays/trips/{trip_id}/checklist/toggle")
+def toggle_trip_checklist(trip_id: str, body: ChecklistToggleRequest, _: dict = Depends(require_user)):
+    if not db.get_trip_detail(trip_id):
+        raise HTTPException(status_code=404, detail="Trip not found")
+    ident = body.item_id or body.label
+    if not ident:
+        raise HTTPException(status_code=400, detail="item_id required")
+    if not db.toggle_checklist_item(trip_id, ident, body.item_type):
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    return db.get_trip_detail(trip_id)
 
 
 @router.post("/holidays/ideas/generate")
@@ -948,6 +1055,8 @@ def add_trip_packing(trip_id: str, body: TripPackingRequest, user: dict = Depend
 
 @router.post("/holidays/trips/{trip_id}/documents/{doc_id}")
 def link_trip_doc(trip_id: str, doc_id: str, user: dict = Depends(require_user)):
+    if not db.get_trip_detail(trip_id):
+        raise HTTPException(status_code=404, detail="Trip not found")
     if not db.get_document(doc_id):
         raise HTTPException(status_code=404, detail="Document not found")
     db.link_trip_document(trip_id, doc_id)
@@ -964,7 +1073,7 @@ def unlink_trip_doc(trip_id: str, doc_id: str, user: dict = Depends(require_user
 @router.post("/finances/scan-receipt")
 async def scan_receipt(
     file: UploadFile = File(...),
-    account: str = Form("joint"),
+    account: str = Form(""),
     user: dict = Depends(require_user),
 ):
     content = await file.read()
@@ -1005,7 +1114,7 @@ async def scan_email_receipts(user: dict = Depends(require_user)):
 def import_email_receipts(body: EmailReceiptImport, user: dict = Depends(require_user)):
     """Commit reviewed email-receipt drafts into the ledger."""
     drafts = [d.model_dump() for d in body.drafts]
-    created = gmail_receipts.commit_drafts(drafts, user, account_id=body.account_id or "joint")
+    created = gmail_receipts.commit_drafts(drafts, user, account_id=body.account_id or None)
     for txn in created:
         activity_svc.log(user, "created", "transaction", f"Email receipt: {txn['description']}", entity_id=txn["id"])
     return {"imported": len(created), "transactions": created}
@@ -1030,10 +1139,13 @@ def api_tasks(_: dict = Depends(require_user)):
 
 @router.post("/tasks")
 async def create_task(body: TaskCreate, user: dict = Depends(require_user)):
+    users = db.list_users()
     assignee = body.assignee_id
     if assignee and assignee not in ("luke", "partner"):
-        name_map = {u["name"].lower(): u["id"] for u in db.list_users()}
+        name_map = {u["name"].lower(): u["id"] for u in users}
         assignee = name_map.get(assignee.lower(), assignee)
+    if assignee and assignee not in {u["id"] for u in users}:  # null = unassigned, always allowed
+        raise HTTPException(status_code=400, detail="Unknown household member")
     task = db.create_task({**body.model_dump(), "assignee_id": assignee})
     await ai_assistant.notify_task_assignee(task, user)  # ping the other person if it's theirs
     return task
@@ -1045,9 +1157,13 @@ async def patch_task(task_id: str, body: TaskUpdate, user: dict = Depends(requir
     if not before:
         raise HTTPException(status_code=404, detail="Task not found")
     patch = body.model_dump(exclude_unset=True, exclude={"notify"})
-    if patch.get("assignee_id") and patch["assignee_id"] not in ("luke", "partner"):
-        name_map = {u["name"].lower(): u["id"] for u in db.list_users()}
-        patch["assignee_id"] = name_map.get(patch["assignee_id"].lower(), patch["assignee_id"])
+    if patch.get("assignee_id"):  # null = unassign, always allowed
+        users = db.list_users()
+        if patch["assignee_id"] not in ("luke", "partner"):
+            name_map = {u["name"].lower(): u["id"] for u in users}
+            patch["assignee_id"] = name_map.get(patch["assignee_id"].lower(), patch["assignee_id"])
+        if patch["assignee_id"] not in {u["id"] for u in users}:
+            raise HTTPException(status_code=400, detail="Unknown household member")
     task = db.update_task(task_id, patch)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1132,12 +1248,13 @@ def download_document(doc_id: str, _: dict = Depends(require_user)):
 
 @router.delete("/documents/{doc_id}")
 def remove_document(doc_id: str, _: dict = Depends(require_user)):
-    file_path = db.delete_document(doc_id)
-    if file_path is None:
+    found, file_path = db.delete_document(doc_id)
+    if not found:
         raise HTTPException(status_code=404, detail="Document not found")
-    disk = doc_files.UPLOAD_DIR / file_path
-    if disk.is_file():
-        disk.unlink()
+    if file_path:  # metadata-only documents have no file to clean up
+        disk = doc_files.UPLOAD_DIR / file_path
+        if disk.is_file():
+            disk.unlink()
     return {"ok": True}
 
 

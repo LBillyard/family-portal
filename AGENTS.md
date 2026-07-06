@@ -26,7 +26,7 @@ cp .env.example .env   # fill in secrets locally — never commit .env
 python -m server.main
 ```
 
-Open **http://localhost:8090**. Sign in with seeded household accounts (see `server/database.py` `_seed()` — change passwords before any public deploy).
+Open **http://localhost:8090**. Sign in with the seeded household accounts (`lbillyard@gmail.com` / `lebillyard@gmail.com`); on a fresh DB the password comes from `FAMILY_PORTAL_SEED_PASSWORD`, or is auto-generated and logged once at seed time (see `server/database.py` `_seed()`).
 
 ## Repository layout
 
@@ -99,11 +99,12 @@ FastAPI (routes.py) ── require_user() session check
 | Document Vault (uploads) | ✅ Done | `documents.py`, `/api/documents/upload` |
 | AI Assistant (tool calling) | ✅ Done | `assistant.py`, `/api/assistant/*`, chat FAB in UI |
 | PWA (manifest + SW) | ✅ Done | `manifest.json`, `sw.js` |
-| Change password | ❌ Not built | — |
-| Token encryption at rest | ❌ Not built | Google/bank tokens plaintext in DB |
+| Change password | ✅ Done | `POST /api/auth/change-password` (`routes.py`), Settings tab in `app.js` |
+| Token encryption at rest | ✅ Done | Google/bank tokens encrypted (Fernet, key from `SECRET_KEY`) in `database.py` |
 | Full XSS hardening | ⚠️ Partial | `esc()` used in assistant + toasts; most `innerHTML` still unescaped |
-| Login rate limiting | ❌ Not built | — |
-| HTTPS / production deploy | 📋 Scripts ready | `deploy/`, not executed |
+| Login rate limiting | ✅ Done | 429 after repeated failures (`routes.py` login) |
+| Automated tests | ✅ Done | pytest suite in `tests/` — run `python -m pytest` |
+| HTTPS / production deploy | ✅ Live | AWS EC2 box, systemd `family-portal` + 3 timers (see `deploy/`, docs/DEPLOY.md) |
 
 See **docs/ROADMAP.md** for prioritized next steps.
 
@@ -131,7 +132,7 @@ Copy `.env.example` → `.env`. **Never commit `.env`.**
 3. **API routes** — protect with `Depends(require_user)` unless explicitly public (login, OAuth callbacks).
 4. **Frontend** — prefer `esc()` for any user data in HTML; API client is `async function api(path, options)`.
 5. **New integrations** — add `is_configured()` helper; return 503 when missing keys.
-6. **Static cache bust** — bump `?v=N` on `index.html` script/style links after JS/CSS changes.
+6. **Static cache bust** — bump `?v=N` on `index.html` script/style links **and** the `CACHE` constant in `sw.js` after JS/CSS changes (the service worker caches aggressively).
 7. **No frontend build step** — do not add webpack/vite unless explicitly requested.
 8. **Comments** — only for non-obvious business logic.
 
@@ -158,12 +159,14 @@ To add a new tool:
 - Vault downloads forced as attachment; MIME from extension
 - OpenRouter model allowlist; CSV upload size cap
 - `.env` gitignored
+- Change-password flow (`POST /api/auth/change-password`); seed password env-driven (`FAMILY_PORTAL_SEED_PASSWORD` or random-logged)
+- Login rate limiting (429 after repeated failures)
+- OAuth/bank tokens encrypted at rest (Fernet key derived from `SECRET_KEY`)
+- pytest suite in `tests/` — run with `python -m pytest`
 
 **Still needed before internet exposure:**
-- Change seeded passwords; add change-password API
-- Encrypt OAuth tokens at rest
 - Escape all dynamic HTML in `app.js` (stored XSS)
-- Login rate limiting; HTTPS at reverse proxy
+- HTTPS at a reverse proxy for any new deployment
 - Restrict AWS security group CIDRs
 
 ## Common AI tasks
@@ -197,13 +200,15 @@ async def t():
 asyncio.run(t())
 "
 
-# Login via curl (session cookie)
+# Login via curl (session cookie) — seeded accounts are lbillyard@gmail.com and
+# lebillyard@gmail.com; fresh-DB password = FAMILY_PORTAL_SEED_PASSWORD (or the
+# auto-generated one logged at seed time)
 curl -c cookies.txt -X POST http://localhost:8090/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"luke@example.com","password":"family123"}'
+  -d '{"email":"lbillyard@gmail.com","password":"YOUR_SEED_PASSWORD"}'
 ```
 
-There is **no automated test suite** yet — add pytest under `tests/` if building one.
+Automated tests: pytest suite in `tests/` (isolated DB via `FAMILY_PORTAL_DB`) — run with `python -m pytest`.
 
 ## Deploy
 
@@ -215,7 +220,13 @@ SECRET_KEY=<64-char hex from secrets.token_hex(32)>
 PUBLIC_URL=https://your-domain.com
 ```
 
-Use `deploy/family-portal.service` (uvicorn on 127.0.0.1:8090) behind Caddy/nginx/Cloudflare with TLS.
+Use `deploy/family-portal.service` (uvicorn on 0.0.0.0:8090) behind Caddy/nginx/Cloudflare with TLS.
+
+**Every deploy to the live box:**
+
+1. The box is **NOT a git repo** — deploy = `scp` changed files to `/opt/family-portal` + `sudo systemctl restart family-portal`.
+2. Frontend changed? Bump the `?v=` cache-bust in `server/static/index.html` **and** the `CACHE` constant in `server/static/sw.js`, or the service worker keeps serving stale assets.
+3. Three timers run alongside the service: `family-portal-digest.timer` (07:00), `family-portal-sync.timer` (hourly), `family-portal-task-reminders.timer` (every 15 min) — unit files in `deploy/`; if you change one, copy it to `/etc/systemd/system/` and `daemon-reload`.
 
 ## Git / secrets policy
 

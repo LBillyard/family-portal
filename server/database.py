@@ -3,8 +3,10 @@
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
+import secrets
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -13,6 +15,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 DB_PATH = Path(os.environ.get("FAMILY_PORTAL_DB") or (Path(__file__).parent.parent / "data" / "family.db"))
+
+logger = logging.getLogger(__name__)
 
 
 # --- Encryption at rest for OAuth/bank tokens (key derived from SECRET_KEY) ---
@@ -486,7 +490,15 @@ def _seed(conn: sqlite3.Connection) -> None:
         ("luke", "lbillyard@gmail.com", "Luke", "#2563eb"),
         ("partner", "lebillyard@gmail.com", "Laura", "#db2777"),
     ]
-    pw = hash_password("family123")
+    password = os.environ.get("FAMILY_PORTAL_SEED_PASSWORD", "").strip()
+    if not password:
+        password = secrets.token_urlsafe(12)[:16]
+        logger.warning("=" * 62)
+        logger.warning("FAMILY_PORTAL_SEED_PASSWORD not set — generated seed password:")
+        logger.warning("    %s", password)
+        logger.warning("Log in with it and change it in Settings, or set the env var.")
+        logger.warning("=" * 62)
+    pw = hash_password(password)
     now = _utcnow()
     for uid, email, name, colour in users:
         conn.execute(
@@ -524,13 +536,17 @@ def list_users() -> list[dict]:
 
 
 def user_public(u: dict) -> dict:
+    with get_conn() as conn:
+        connected = conn.execute(
+            "SELECT 1 FROM google_accounts WHERE user_id = ? LIMIT 1", (u["id"],)
+        ).fetchone()
     return {
         "id": u["id"],
         "name": u["name"],
         "email": u["email"],
         "colour": u["colour"],
         "phone": u.get("phone"),
-        "google_connected": bool(u.get("google_token_json")),
+        "google_connected": bool(connected),
     }
 
 
@@ -569,7 +585,7 @@ def update_user(user_id: str, data: dict) -> Optional[dict]:
             values.append(user_id)
             conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", values)
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return user_public(row_to_dict(row))
+    return user_public(row_to_dict(row))
 
 
 def update_user_password(user_id: str, password_hash: str) -> bool:
@@ -600,8 +616,15 @@ def create_event(data: dict, user_id: str) -> dict:
         return _event_out(row_to_dict(row))
 
 
+def get_event(event_id: str) -> Optional[dict]:
+    """Raw event row (includes source/google_event_id/google_account_id) — server use."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+        return row_to_dict(row) if row else None
+
+
 def update_event(event_id: str, data: dict) -> Optional[dict]:
-    mapping = {"title": "title", "start": "start_at", "end": "end_at", "location": "location", "user_id": "user_id"}
+    mapping = {"title": "title", "start": "start_at", "end": "end_at", "location": "location", "user_id": "user_id", "description": "description"}
     fields, values = [], []
     for key, col in mapping.items():
         if data.get(key) is not None:
@@ -643,8 +666,22 @@ def _event_out(r: dict) -> dict:
 
 # --- Bills ---
 
+def _reset_unlocked_bills(conn: sqlite3.Connection) -> int:
+    """Un-tick manually-paid bills once a new billing period starts, so they
+    come back as due instead of staying paid forever. Returns rows changed."""
+    changed = 0
+    rows = conn.execute("SELECT id, recurrence, paid_at FROM bills WHERE locked = 0 AND paid = 1").fetchall()
+    for r in rows:
+        period_start = _lock_period_start(r["recurrence"] or "monthly")
+        if not r["paid_at"] or str(r["paid_at"])[:10] < period_start:
+            conn.execute("UPDATE bills SET paid = 0, paid_at = NULL WHERE id = ?", (r["id"],))
+            changed += 1
+    return changed
+
+
 def list_bills() -> list[dict]:
     with get_conn() as conn:
+        _reset_unlocked_bills(conn)
         rows = conn.execute(
             """SELECT b.*, s.display_name AS locked_to_name, s.last_charge_date AS last_charge_date
                FROM bills b LEFT JOIN subscriptions s ON s.id = b.subscription_id
@@ -738,6 +775,7 @@ def reconcile_locked_bills() -> int:
     the matched bank payment landed in the current billing period. Returns rows changed."""
     changed = 0
     with get_conn() as conn:
+        changed += _reset_unlocked_bills(conn)  # manual bills roll over each period too
         rows = conn.execute(
             """SELECT b.id, b.paid, b.recurrence, s.last_charge_date
                FROM bills b JOIN subscriptions s ON s.id = b.subscription_id
@@ -806,20 +844,75 @@ def create_transaction(data: dict) -> dict:
     tid = _new_id()
     now = _utcnow()
     txn_date = data.get("date") or date.today().isoformat()
-    account_id = data.get("account_id") or "joint"
+    account_id = resolve_account_id(data.get("account_id"))
     amount = float(data["amount"])
+    ext = data.get("external_id")
     with get_conn() as conn:
+        if ext:
+            # Idempotent: if this external source (e.g. a Gmail message) was already
+            # imported, return the existing row without double-inserting or
+            # double-adjusting the balance.
+            existing = conn.execute(
+                """SELECT t.*, a.name AS account_name FROM transactions t
+                   LEFT JOIN accounts a ON a.id = t.account_id WHERE t.external_id = ?""",
+                (ext,),
+            ).fetchone()
+            if existing:
+                return _txn_out(row_to_dict(existing))
         conn.execute(
-            "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (tid, account_id, data["description"], data["category"], amount, txn_date, now),
+            "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, external_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (tid, account_id, data["description"], data["category"], amount, txn_date, ext, now),
         )
-        conn.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, account_id))
+        if account_id:
+            conn.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, account_id))
         row = conn.execute(
             """SELECT t.*, a.name AS account_name FROM transactions t
                LEFT JOIN accounts a ON a.id = t.account_id WHERE t.id = ?""",
             (tid,),
         ).fetchone()
         return _txn_out(row_to_dict(row))
+
+
+def existing_external_ids(prefix: str = "") -> set[str]:
+    """External ids already in the ledger (optionally filtered by a prefix like
+    'gmail:'). Used to skip re-importing the same source rows."""
+    with get_conn() as conn:
+        if prefix:
+            rows = conn.execute(
+                "SELECT external_id FROM transactions WHERE external_id LIKE ?", (f"{prefix}%",)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT external_id FROM transactions WHERE external_id IS NOT NULL"
+            ).fetchall()
+        return {r["external_id"] for r in rows}
+
+
+def create_transfer(from_id: str, to_id: str, amount: float, description: str = "Transfer", txn_date: str | None = None) -> dict:
+    """Move money between two accounts atomically: both transaction rows and
+    both balance updates happen in one transaction (all-or-nothing)."""
+    amount = abs(float(amount))
+    when = txn_date or date.today().isoformat()
+    now = _utcnow()
+    with get_conn() as conn:
+        names = {
+            r["id"]: r["name"]
+            for r in conn.execute("SELECT id, name FROM accounts WHERE id IN (?, ?)", (from_id, to_id)).fetchall()
+        }
+        if from_id not in names or to_id not in names:
+            raise ValueError("Unknown account")
+        out_id, in_id = _new_id(), _new_id()
+        conn.execute(
+            "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (out_id, from_id, f"{description} → {names[to_id]}", "Transfers", -amount, when, now),
+        )
+        conn.execute(
+            "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (in_id, to_id, f"{description} ← {names[from_id]}", "Transfers", amount, when, now),
+        )
+        conn.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, from_id))
+        conn.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, to_id))
+    return {"ok": True, "from": names[from_id], "to": names[to_id], "amount": amount}
 
 
 def delete_transaction(txn_id: str) -> bool:
@@ -853,6 +946,21 @@ def get_transaction(txn_id: str) -> Optional[dict]:
 
 
 # --- Accounts & budgets ---
+
+def resolve_account_id(preferred: str | None = None) -> str | None:
+    """Resolve `preferred` (an account id OR name) to a real accounts.id.
+    Falls back to the first current account, then any account, else None."""
+    accounts = list_accounts(include_hidden=True)
+    if not accounts:
+        return None
+    if preferred:
+        if any(a["id"] == preferred for a in accounts):
+            return preferred
+        by_name = {a["name"]: a["id"] for a in accounts}
+        if preferred in by_name:
+            return by_name[preferred]
+    return next((a["id"] for a in accounts if a["type"] == "current"), accounts[0]["id"])
+
 
 def list_accounts(include_hidden: bool = False) -> list[dict]:
     with get_conn() as conn:
@@ -905,22 +1013,112 @@ def list_budgets() -> list[dict]:
         return result
 
 
+def _budget_out(category: str) -> Optional[dict]:
+    month_prefix = date.today().strftime("%Y-%m")
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM budgets WHERE category = ?", (category,)).fetchone()
+        if not row:
+            return None
+        d = row_to_dict(row)
+        spent = conn.execute(
+            """SELECT COALESCE(SUM(ABS(amount)), 0) AS s FROM transactions
+               WHERE category = ? AND amount < 0 AND hidden = 0 AND txn_date LIKE ?""",
+            (d["category"], f"{month_prefix}%"),
+        ).fetchone()["s"]
+        return {"category": d["category"], "limit": d["monthly_limit"], "spent": round(spent, 2)}
+
+
+def create_budget(category: str, monthly_limit: float) -> dict:
+    """Create (or replace) a budget target for a category. Category is unique."""
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO budgets (id, category, monthly_limit) VALUES (?, ?, ?)
+               ON CONFLICT(category) DO UPDATE SET monthly_limit = excluded.monthly_limit""",
+            (_new_id(), category, monthly_limit),
+        )
+    return _budget_out(category)
+
+
+def update_budget(category: str, monthly_limit: float) -> Optional[dict]:
+    with get_conn() as conn:
+        cur = conn.execute("UPDATE budgets SET monthly_limit = ? WHERE category = ?", (monthly_limit, category))
+        if cur.rowcount == 0:
+            return None
+    return _budget_out(category)
+
+
+def delete_budget(category: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM budgets WHERE category = ?", (category,))
+        return cur.rowcount > 0
+
+
 def list_savings_goals() -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM savings_goals ORDER BY name").fetchall()
         return [row_to_dict(r) for r in rows]
 
 
+def get_savings_goal(goal_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM savings_goals WHERE id = ?", (goal_id,)).fetchone()
+        return row_to_dict(row) if row else None
+
+
+def create_savings_goal(data: dict) -> dict:
+    gid = _new_id()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO savings_goals (id, name, target, current, colour) VALUES (?, ?, ?, ?, ?)",
+            (gid, data["name"], data["target"], data.get("current", 0) or 0, data.get("colour") or "#00a89e"),
+        )
+        row = conn.execute("SELECT * FROM savings_goals WHERE id = ?", (gid,)).fetchone()
+        return row_to_dict(row)
+
+
+def update_savings_goal(goal_id: str, data: dict) -> Optional[dict]:
+    mapping = {"name": "name", "target": "target", "current": "current", "colour": "colour"}
+    fields, values = [], []
+    for key, col in mapping.items():
+        if data.get(key) is not None:
+            fields.append(f"{col} = ?")
+            values.append(data[key])
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM savings_goals WHERE id = ?", (goal_id,)).fetchone():
+            return None
+        if fields:
+            values.append(goal_id)
+            conn.execute(f"UPDATE savings_goals SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM savings_goals WHERE id = ?", (goal_id,)).fetchone()
+        return row_to_dict(row)
+
+
+def delete_savings_goal(goal_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM savings_goals WHERE id = ?", (goal_id,))
+        return cur.rowcount > 0
+
+
 def finance_summary() -> dict:
+    from server.services import categorize as cz
+
     month_prefix = date.today().strftime("%Y-%m")
+    # Transfers/savings/crypto shuffles aren't income or spending (matches
+    # list_budgets/category_breakdown). Income stays countable as income.
+    spend_excluded = sorted(cz.NON_SPEND_CATEGORIES)
+    income_excluded = sorted(cz.NON_SPEND_CATEGORIES - {"Income"})
     with get_conn() as conn:
         income = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) AS s FROM transactions WHERE amount > 0 AND txn_date LIKE ?",
-            (f"{month_prefix}%",),
+            f"""SELECT COALESCE(SUM(amount), 0) AS s FROM transactions
+                WHERE amount > 0 AND hidden = 0 AND txn_date LIKE ?
+                  AND category NOT IN ({','.join('?' * len(income_excluded))})""",
+            (f"{month_prefix}%", *income_excluded),
         ).fetchone()["s"]
         spent = conn.execute(
-            "SELECT COALESCE(SUM(ABS(amount)), 0) AS s FROM transactions WHERE amount < 0 AND txn_date LIKE ?",
-            (f"{month_prefix}%",),
+            f"""SELECT COALESCE(SUM(ABS(amount)), 0) AS s FROM transactions
+                WHERE amount < 0 AND hidden = 0 AND txn_date LIKE ?
+                  AND category NOT IN ({','.join('?' * len(spend_excluded))})""",
+            (f"{month_prefix}%", *spend_excluded),
         ).fetchone()["s"]
         bills_due = conn.execute("SELECT COALESCE(SUM(amount), 0) AS s FROM bills WHERE paid = 0").fetchone()["s"]
         current_total = conn.execute(
@@ -1224,13 +1422,13 @@ def list_trips() -> list[dict]:
         for r in rows:
             d = row_to_dict(r)
             checklist = conn.execute(
-                "SELECT label, done, item_type FROM holiday_checklist WHERE trip_id = ? ORDER BY sort_order",
+                "SELECT id, label, done, item_type FROM holiday_checklist WHERE trip_id = ? ORDER BY sort_order",
                 (d["id"],),
             ).fetchall()
             checklist_items = []
             packing_items = []
             for c in checklist:
-                item = {"label": c["label"], "done": bool(c["done"])}
+                item = {"id": c["id"], "label": c["label"], "done": bool(c["done"])}
                 if c["item_type"] == "packing":
                     packing_items.append(item)
                 else:
@@ -1245,7 +1443,9 @@ def list_trips() -> list[dict]:
             if d.get("start_date") and d["status"] == "booked":
                 try:
                     start = date.fromisoformat(d["start_date"])
-                    days_until = max((start - today).days, 0)
+                    trip_end = date.fromisoformat(d["end_date"]) if d.get("end_date") else start
+                    if trip_end >= today:  # ended trips have no countdown
+                        days_until = max((start - today).days, 0)
                 except ValueError:
                     pass
             trips.append({
@@ -1288,10 +1488,11 @@ def update_trip(trip_id: str, data: dict) -> Optional[dict]:
         "spent": "spent",
         "destination": "destination",
     }
+    nullable = {"start", "end", "destination"}  # explicit null clears these
     fields = []
     values = []
     for key, col in colmap.items():
-        if data.get(key) is not None:
+        if key in data and (data[key] is not None or key in nullable):
             fields.append(f"{col} = ?")
             values.append(data[key])
     with get_conn() as conn:
@@ -1301,6 +1502,19 @@ def update_trip(trip_id: str, data: dict) -> Optional[dict]:
             values.append(trip_id)
             conn.execute(f"UPDATE holiday_trips SET {', '.join(fields)} WHERE id = ?", values)
     return next((t for t in list_trips() if t["id"] == trip_id), None)
+
+
+def delete_trip(trip_id: str) -> bool:
+    """Delete a trip and its checklist/packing rows and document links;
+    photos linked to the trip are kept but unlinked."""
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM holiday_trips WHERE id = ?", (trip_id,)).fetchone():
+            return False
+        conn.execute("DELETE FROM holiday_checklist WHERE trip_id = ?", (trip_id,))
+        conn.execute("DELETE FROM trip_documents WHERE trip_id = ?", (trip_id,))
+        conn.execute("UPDATE media_items SET trip_id = NULL WHERE trip_id = ?", (trip_id,))
+        conn.execute("DELETE FROM holiday_trips WHERE id = ?", (trip_id,))
+        return True
 
 
 def list_holiday_ideas() -> list[dict]:
@@ -1409,14 +1623,15 @@ def create_document(data: dict) -> dict:
         return _document_out(row_to_dict(row))
 
 
-def delete_document(doc_id: str) -> Optional[str]:
-    """Delete document row; returns stored file_path for filesystem cleanup."""
+def delete_document(doc_id: str) -> tuple[bool, Optional[str]]:
+    """Delete document row. Returns (found, stored file_path for filesystem
+    cleanup) — metadata-only documents are (True, None), missing rows (False, None)."""
     with get_conn() as conn:
         row = conn.execute("SELECT file_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not row:
-            return None
+            return False, None
         conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-        return row["file_path"]
+        return True, row["file_path"]
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -1548,16 +1763,18 @@ def import_transactions(rows: list[dict]) -> int:
     with get_conn() as conn:
         for row in rows:
             tid = _new_id()
+            account_id = row.get("account_id")
             conn.execute(
                 """INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (tid, row.get("account_id", "joint"), row["description"], row.get("category", "Imported"),
+                (tid, account_id, row["description"], row.get("category", "Imported"),
                  row["amount"], row["date"], now),
             )
-            conn.execute(
-                "UPDATE accounts SET balance = balance + ? WHERE id = ?",
-                (row["amount"], row.get("account_id", "joint")),
-            )
+            if account_id:
+                conn.execute(
+                    "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+                    (row["amount"], account_id),
+                )
             count += 1
     return count
 
@@ -1665,6 +1882,12 @@ def mark_connection_synced(connection_id: str) -> None:
             "UPDATE bank_connections SET last_synced_at = ? WHERE id = ?",
             (now, connection_id),
         )
+
+
+def set_connection_status(connection_id: str, status: str) -> None:
+    """e.g. 'needs_reauth' when a sync fails; update_bank_tokens resets to 'active'."""
+    with get_conn() as conn:
+        conn.execute("UPDATE bank_connections SET status = ? WHERE id = ?", (status, connection_id))
 
 
 def upsert_linked_account(
@@ -1880,20 +2103,19 @@ def sync_subscriptions(detected: list[dict]) -> list[dict]:
             if row and row["status"] == "ignored":
                 continue
             if row:
+                # display_name/category are user-editable — never clobber them on re-sync.
                 conn.execute(
-                    """UPDATE subscriptions SET display_name = ?, amount = ?, frequency = ?,
+                    """UPDATE subscriptions SET amount = ?, frequency = ?,
                        last_charge_date = ?, next_expected_date = ?, occurrence_count = ?,
-                       account = ?, category = ?, updated_at = ?
+                       account = ?, updated_at = ?
                        WHERE merchant_key = ?""",
                     (
-                        d["display_name"],
                         d["amount"],
                         d["frequency"],
                         d.get("last_charge_date"),
                         d.get("next_expected_date"),
                         d["occurrence_count"],
                         d.get("account", ""),
-                        d.get("category", "Subscriptions"),
                         now,
                         d["merchant_key"],
                     ),
@@ -1918,6 +2140,23 @@ def sync_subscriptions(detected: list[dict]) -> list[dict]:
                         now,
                     ),
                 )
+        # Lapse pass: no charge for ~2x the expected period means it has stopped;
+        # a fresh charge within the window revives it. Only auto-manage 'detected'
+        # and 'lapsed' rows — never a user-'confirmed' sub (that flag is theirs to
+        # keep) and never 'ignored'. Revival restores 'detected', not a phantom
+        # 'active' status the UI has no label for.
+        stale_days = {"weekly": 14, "monthly": 60, "quarterly": 184, "yearly": 730}
+        today = date.today()
+        for r in conn.execute(
+            "SELECT id, frequency, status, last_charge_date FROM subscriptions WHERE status IN ('detected', 'lapsed')"
+        ).fetchall():
+            cutoff = (today - timedelta(days=stale_days.get(r["frequency"], 60))).isoformat()
+            last = str(r["last_charge_date"] or "")[:10]
+            if last and last < cutoff:
+                if r["status"] != "lapsed":
+                    conn.execute("UPDATE subscriptions SET status = 'lapsed', updated_at = ? WHERE id = ?", (now, r["id"]))
+            elif r["status"] == "lapsed":
+                conn.execute("UPDATE subscriptions SET status = 'detected', updated_at = ? WHERE id = ?", (now, r["id"]))
     return list_subscriptions(include_ignored=True)
 
 
@@ -2134,26 +2373,38 @@ def list_trip_documents(trip_id: str) -> list[dict]:
 def add_packing_items(trip_id: str, labels: list[str]) -> list[dict]:
     with get_conn() as conn:
         existing = conn.execute(
-            "SELECT COUNT(*) AS c FROM holiday_checklist WHERE trip_id = ? AND item_type = 'packing'",
+            "SELECT label FROM holiday_checklist WHERE trip_id = ? AND item_type = 'packing'",
             (trip_id,),
-        ).fetchone()["c"]
-        start_order = existing
-        for i, label in enumerate(labels):
+        ).fetchall()
+        seen = {str(r["label"]).strip().lower() for r in existing}
+        order = len(existing)
+        for label in labels:
+            key = label.strip().lower()
+            if key in seen:  # re-applying a template shouldn't duplicate items
+                continue
             conn.execute(
                 """INSERT INTO holiday_checklist (id, trip_id, label, done, sort_order, item_type)
                    VALUES (?, ?, ?, 0, ?, 'packing')""",
-                (_new_id(), trip_id, label, start_order + i),
+                (_new_id(), trip_id, label, order),
             )
+            seen.add(key)
+            order += 1
     trip = get_trip_detail(trip_id)
     return trip.get("packing", []) if trip else []
 
 
 def toggle_checklist_item(trip_id: str, label: str, item_type: str = "checklist") -> bool:
+    """`label` may be the row id or the visible label (list_trips only exposes labels)."""
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT id, done FROM holiday_checklist WHERE trip_id = ? AND label = ? AND item_type = ?",
-            (trip_id, label, item_type),
+            "SELECT id, done FROM holiday_checklist WHERE trip_id = ? AND id = ?",
+            (trip_id, label),
         ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT id, done FROM holiday_checklist WHERE trip_id = ? AND label = ? AND item_type = ?",
+                (trip_id, label, item_type),
+            ).fetchone()
         if not row:
             return False
         conn.execute(
@@ -2179,6 +2430,7 @@ def create_pending_action(data: dict) -> dict:
     now = _utcnow()
     expires = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
     with get_conn() as conn:
+        conn.execute("DELETE FROM pending_actions WHERE expires_at < ?", (now,))  # opportunistic cleanup
         conn.execute(
             """INSERT INTO pending_actions (id, user_id, tool_name, args_json, summary, created_at, expires_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -2261,3 +2513,12 @@ def link_bill_subscription(bill_id: str, subscription_id: str) -> None:
 def set_event_google_written(event_id: str, google_id: str) -> None:
     with get_conn() as conn:
         conn.execute("UPDATE events SET google_event_id_written = ?, source = 'portal' WHERE id = ?", (google_id, event_id))
+
+
+def list_written_google_event_ids() -> set[str]:
+    """Google event ids the portal wrote back — sync skips these to avoid duplicates."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT google_event_id_written FROM events WHERE google_event_id_written IS NOT NULL"
+        ).fetchall()
+        return {r["google_event_id_written"] for r in rows}

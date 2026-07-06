@@ -68,7 +68,7 @@ def build_renewal_calendar(days_ahead: int = 90) -> dict:
         )
 
     for sub in db.list_subscriptions(include_ignored=False):
-        if sub.get("status") == "ignored" or not sub.get("next_expected_date"):
+        if sub.get("status") in ("ignored", "lapsed") or not sub.get("next_expected_date"):
             continue
         try:
             due = date.fromisoformat(sub["next_expected_date"][:10])

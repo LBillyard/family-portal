@@ -74,7 +74,13 @@ def send_renewal_reminders() -> dict:
 
     lines = ["The Hub — upcoming renewals:", ""]
     for item in urgent:
-        when = "today" if item["days_until"] == 0 else f"in {item['days_until']} day(s)"
+        d = item["days_until"]
+        if d < 0:
+            when = f"{-d} day(s) overdue"
+        elif d == 0:
+            when = "today"
+        else:
+            when = f"in {d} day(s)"
         lines.append(f"• {item['title']} ({item['type']}) — {when} ({item['date']})")
     body = "\n".join(lines)
     result = send_email("The Hub renewals reminder", body)

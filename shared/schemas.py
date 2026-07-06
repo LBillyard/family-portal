@@ -46,6 +46,15 @@ class EventCreate(BaseModel):
     google_account_id: Optional[str] = None  # which connected Google calendar to write to
 
 
+class EventUpdate(BaseModel):
+    title: Optional[str] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    all_day: Optional[bool] = None
+    location: Optional[str] = None
+    description: Optional[str] = None
+
+
 class BillCreate(BaseModel):
     name: str
     amount: float
@@ -64,6 +73,29 @@ class BillUpdate(BaseModel):
 
 class BillLock(BaseModel):
     subscription_id: Optional[str] = None
+
+
+class BudgetCreate(BaseModel):
+    category: str
+    monthly_limit: float = Field(gt=0)
+
+
+class BudgetUpdate(BaseModel):
+    monthly_limit: float = Field(gt=0)
+
+
+class SavingsGoalCreate(BaseModel):
+    name: str
+    target: float = Field(gt=0)
+    current: float = 0
+    colour: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+
+
+class SavingsGoalUpdate(BaseModel):
+    name: Optional[str] = None
+    target: Optional[float] = Field(default=None, gt=0)
+    current: Optional[float] = Field(default=None, ge=0)
+    colour: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
 
 
 class TransactionCreate(BaseModel):
@@ -134,7 +166,7 @@ class TripUpdate(BaseModel):
 
 class MemberUpdate(BaseModel):
     name: Optional[str] = None
-    colour: Optional[str] = None
+    colour: Optional[str] = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     phone: Optional[str] = None
 
 
@@ -214,4 +246,10 @@ class SearchQuery(BaseModel):
 
 class TripPackingRequest(BaseModel):
     template: Literal["default", "beach", "city", "weekend"] = "default"
+
+
+class ChecklistToggleRequest(BaseModel):
+    item_id: Optional[str] = None  # checklist row id, or the item's label
+    label: Optional[str] = None
+    item_type: Literal["checklist", "packing"] = "checklist"
 

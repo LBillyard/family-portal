@@ -28,7 +28,7 @@ def _match_score(bill_name: str, sub_name: str) -> float:
 
 def build_merged_recurring() -> dict:
     bills = db.list_bills()
-    subs = [s for s in db.list_subscriptions(include_ignored=False) if s.get("status") != "ignored"]
+    subs = [s for s in db.list_subscriptions(include_ignored=False) if s.get("status") not in ("ignored", "lapsed")]
     used_sub_ids: set[str] = set()
     merged: list[dict] = []
     duplicate_savings = 0.0

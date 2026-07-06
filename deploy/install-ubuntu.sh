@@ -56,10 +56,18 @@ if [[ ! -f "$ENV_FILE" ]]; then
 SECRET_KEY=${SECRET}
 PUBLIC_URL=http://${PUBLIC_IP}:${PORT}
 GOOGLE_REDIRECT_URI=http://${PUBLIC_IP}:${PORT}/api/auth/google/callback
+TRUELAYER_REDIRECT_URI=http://${PUBLIC_IP}:${PORT}/api/banking/callback
 EOF
   chown "$DEPLOY_USER:$DEPLOY_USER" "$ENV_FILE"
   echo "==> Created $ENV_FILE"
-  echo "    Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OPENROUTER_API_KEY as needed."
+  echo "    Optional keys to fill in (see .env.example for details):"
+  echo "      GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET      Calendar sync + Gmail receipts"
+  echo "      TRUELAYER_CLIENT_ID / TRUELAYER_CLIENT_SECRET / TRUELAYER_ENV   Open Banking"
+  echo "      TWILIO_* (or WHATSAPP_* for Meta)            WhatsApp digest + assistant"
+  echo "      OPENROUTER_API_KEY                           AI assistant + holiday ideas"
+  echo "      WEATHER_LATITUDE / WEATHER_LONGITUDE / WEATHER_LABEL   digest weather"
+  echo "      SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM / SMTP_TLS / NOTIFY_EMAIL   email reminders"
+  echo "      FAMILY_PORTAL_SEED_PASSWORD                  fresh-DB seed password (random + logged if unset)"
 else
   echo "==> Keeping existing $ENV_FILE"
 fi
@@ -67,11 +75,18 @@ fi
 mkdir -p "$APP_DIR/data"
 chown "$DEPLOY_USER:$DEPLOY_USER" "$APP_DIR/data"
 
-echo "==> Installing systemd service..."
-cp "$APP_DIR/deploy/family-portal.service" "/etc/systemd/system/${SERVICE}.service"
+echo "==> Installing systemd units (service + timers)..."
+cp "$APP_DIR"/deploy/family-portal*.service "$APP_DIR"/deploy/family-portal*.timer /etc/systemd/system/
+# Keep the app unit's port in sync with this install's PORT choice (unit ships with 8090).
+sed -i -E "s/--port [0-9]+/--port ${PORT}/" "/etc/systemd/system/${SERVICE}.service"
 systemctl daemon-reload
 systemctl enable "$SERVICE"
 systemctl restart "$SERVICE"
+
+echo "==> Enabling timers (07:00 digest, hourly sync, 15-min task reminders)..."
+for TIMER in family-portal-digest.timer family-portal-sync.timer family-portal-task-reminders.timer; do
+  systemctl enable --now "$TIMER"
+done
 
 echo "==> Firewall (ufw) — opening port $PORT..."
 ufw allow OpenSSH >/dev/null 2>&1 || true
@@ -84,6 +99,9 @@ if systemctl is-active --quiet "$SERVICE"; then
   echo "=============================================="
   echo "  Family Portal is running"
   echo "  URL: http://${PUBLIC_IP}:${PORT}"
+  echo "  Logins: lbillyard@gmail.com / lebillyard@gmail.com"
+  echo "  Fresh-DB password: FAMILY_PORTAL_SEED_PASSWORD if set,"
+  echo "  else auto-generated + logged (journalctl -u ${SERVICE})"
   echo "  Update Google OAuth redirect URI to match PUBLIC_URL"
   echo "=============================================="
 else

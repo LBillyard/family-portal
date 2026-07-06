@@ -2631,13 +2631,17 @@ dialog select:focus {
 .bill-edit-btn:hover, .bill-lock-btn:hover { color: var(--accent); background: var(--surface-muted); }
 .bill-auto { color: var(--accent); font-weight: 600; }
 
-.task-item.editing, .list-item.editing {
+.task-item.editing, .list-item.editing, .maintenance-row.editing,
+.budget-item.editing, .savings-card.editing {
   flex-direction: column;
   align-items: stretch;
   background: var(--surface-muted);
   border-radius: 8px;
   padding: 12px;
 }
+.budget-item { margin-bottom: 14px; }
+.savings-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.savings-head h4 { margin: 0; }
 .row-edit { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .row-edit .te-input {
   padding: 8px 10px; font-size: 0.9375rem; font-weight: 600; font-family: var(--font);
@@ -3343,6 +3347,35 @@ dialog select:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(0, 168, 158, 0.15);
+}
+
+/* Inline row editors (tasks, bills, maintenance) keep their compact styling
+   inside modals — the generic .wf-modal-body label/input rules above would
+   otherwise oversize them (e.g. the All-tasks modal). */
+.wf-modal-body .row-edit-fields label {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  gap: 3px;
+  margin-bottom: 0;
+}
+.wf-modal-body .row-edit-fields input,
+.wf-modal-body .row-edit-fields select {
+  padding: 6px 8px;
+  font-size: 0.8125rem;
+}
+.wf-modal-body .row-edit-fields .row-edit-check {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.wf-modal-body .row-edit .te-input {
+  padding: 8px 10px;
+  font-size: 0.9375rem;
 }
 
 .wf-modal-footer {

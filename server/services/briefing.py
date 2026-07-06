@@ -20,6 +20,17 @@ def _parse_dt(s: str) -> datetime | None:
         return None
 
 
+def _trip_ended(trip: dict) -> bool:
+    """A trip is over when its end (or start, if end is unset) is in the past."""
+    ref = trip.get("end") or trip.get("start")
+    if not ref:
+        return False
+    try:
+        return date.fromisoformat(str(ref)[:10]) < date.today()
+    except (ValueError, TypeError):
+        return False
+
+
 def build_briefing(user: dict | None = None) -> dict:
     today = date.today()
     now = datetime.now()
@@ -45,9 +56,10 @@ def build_briefing(user: dict | None = None) -> dict:
     renewals = renewals_svc.build_renewal_calendar(days_ahead=14)
     urgent_renewals = [r for r in renewals["items"] if r["days_until"] <= 7][:4]
 
-    next_trip = next((t for t in trips if t.get("days_until") is not None), None)
+    active_trips = [t for t in trips if not _trip_ended(t)]
+    next_trip = next((t for t in active_trips if t.get("days_until") is not None), None)
     if not next_trip:
-        next_trip = next((t for t in trips if t.get("start")), None)
+        next_trip = next((t for t in active_trips if t.get("start")), None)
 
     greeting_hour = now.hour
     if greeting_hour < 12:

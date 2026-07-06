@@ -104,7 +104,9 @@ def sync_account(account: dict) -> int:
     creds = _credentials(account["token_json"])
     service = _service(creds)
     now = datetime.now(timezone.utc)
-    time_min = now.isoformat()
+    # Start of today, not now — otherwise events that ended earlier today vanish
+    # from the portal at the next hourly sync.
+    time_min = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     time_max = (now + timedelta(days=120)).isoformat()
 
     # Fetch the calendar list FIRST. If this fails (expired/invalid token), abort
@@ -115,8 +117,9 @@ def sync_account(account: dict) -> int:
         logger.warning("Calendar sync aborted for %s (token/API error) — keeping existing events: %s", account.get("email"), exc)
         return 0
 
-    db.delete_events_for_google_account(account["id"])
-    count = 0
+    # Fetch ALL events (paginated) for every selected calendar BEFORE deleting
+    # anything — a transient events-fetch failure must not wipe the calendar.
+    fetched: list[tuple[str, dict]] = []  # (calendar_name, event item)
     for cal in cal_items:
         # Only sync this account's OWN primary calendar — not the many other
         # calendars shared into a work account (staff diaries etc.), which would
@@ -125,41 +128,56 @@ def sync_account(account: dict) -> int:
             continue
         cal_id = cal.get("id", "primary")
         cal_name = cal.get("summaryOverride") or cal.get("summary") or ""
+        page_token = None
         try:
-            events_result = (
-                service.events()
-                .list(
-                    calendarId=cal_id,
-                    timeMin=time_min,
-                    timeMax=time_max,
-                    singleEvents=True,
-                    orderBy="startTime",
-                    maxResults=250,
+            while True:
+                events_result = (
+                    service.events()
+                    .list(
+                        calendarId=cal_id,
+                        timeMin=time_min,
+                        timeMax=time_max,
+                        singleEvents=True,
+                        orderBy="startTime",
+                        maxResults=250,
+                        pageToken=page_token,
+                    )
+                    .execute()
                 )
-                .execute()
-            )
+                fetched.extend((cal_name, item) for item in events_result.get("items", []))
+                page_token = events_result.get("nextPageToken")
+                if not page_token:
+                    break
         except Exception as exc:
-            logger.warning("Calendar %s list failed: %s", cal_id, exc)
+            logger.warning("Calendar %s list failed for %s — keeping existing events: %s", cal_id, account.get("email"), exc)
+            return 0
+
+    written_ids = db.list_written_google_event_ids()
+    db.delete_events_for_google_account(account["id"])
+    count = 0
+    for cal_name, item in fetched:
+        # Skip events the portal itself pushed to Google — they already exist as
+        # portal events; re-importing them would show a duplicate copy.
+        if item.get("id") in written_ids:
             continue
-        for item in events_result.get("items", []):
-            start = item.get("start", {})
-            end = item.get("end", {})
-            start_at = start.get("dateTime") or start.get("date", "")
-            if not start_at:
-                continue
-            db.create_google_event(
-                user_id=account["user_id"],
-                google_account_id=account["id"],
-                google_id=item.get("id", ""),
-                title=item.get("summary", "Busy"),
-                start=start_at,
-                end=end.get("dateTime") or end.get("date"),
-                all_day="date" in start,
-                location=item.get("location"),
-                calendar_name=cal_name,
-                description=item.get("description"),
-            )
-            count += 1
+        start = item.get("start", {})
+        end = item.get("end", {})
+        start_at = start.get("dateTime") or start.get("date", "")
+        if not start_at:
+            continue
+        db.create_google_event(
+            user_id=account["user_id"],
+            google_account_id=account["id"],
+            google_id=item.get("id", ""),
+            title=item.get("summary", "Busy"),
+            start=start_at,
+            end=end.get("dateTime") or end.get("date"),
+            all_day="date" in start,
+            location=item.get("location"),
+            calendar_name=cal_name,
+            description=item.get("description"),
+        )
+        count += 1
 
     try:
         db.update_google_account_token(account["id"], creds.to_json())

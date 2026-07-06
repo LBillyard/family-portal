@@ -142,6 +142,8 @@ async def _relevant_trip(lookahead_days: int):
     today = date.today()
     best = None  # (sort_key, trip, candidates)
     for t in db.list_trips():
+        if t.get("status") != "booked":
+            continue  # a tentative idea/planning trip must not replace the home forecast
         start = t.get("start")
         if not start:
             continue

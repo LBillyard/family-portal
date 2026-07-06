@@ -32,7 +32,7 @@ python -m server.main
 
 Open **http://localhost:8090**
 
-On first run, SQLite seed data creates two household users. **Change default passwords before deploying publicly** (see `server/database.py` seed or add a change-password flow).
+On first run, SQLite seed data creates two household users. The seed password comes from `FAMILY_PORTAL_SEED_PASSWORD` in `.env` (leave empty to auto-generate one, logged once at seed time); rotate it any time via Settings → change password.
 
 ## Configuration
 

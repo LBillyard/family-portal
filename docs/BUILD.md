@@ -63,7 +63,7 @@ The Family Portal/
 ### Phase 1 — Core app (complete)
 
 - SQLite schema with seed users, bills, events, appointments, trips, budgets
-- Session-based login (`luke@example.com` / `partner@example.com`, password `family123`)
+- Session-based login (`lbillyard@gmail.com` / `lebillyard@gmail.com`; fresh-DB seed password comes from `FAMILY_PORTAL_SEED_PASSWORD`, or is auto-generated and logged once at seed time)
 - Full CRUD via `/api/*` for events, bills, transactions, tasks, appointments, trips, documents
 - Dashboard built from live queries (not mock data)
 - Modal forms wired to POST endpoints

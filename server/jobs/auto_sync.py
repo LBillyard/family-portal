@@ -44,12 +44,22 @@ async def run() -> None:
             try:
                 synced = await open_banking.sync_connection(internal, db)
                 logger.info("Bank %s: %s", conn["provider_name"], synced)
+            except RuntimeError as exc:  # expired consent/tokens — flag for the UI
+                logger.warning("Bank %s sync failed (needs re-auth): %s", conn["provider_name"], exc)
+                try:
+                    db.set_connection_status(conn["id"], "needs_reauth")
+                except Exception:
+                    logger.exception("Failed to flag connection %s as needs_reauth", conn["id"])
             except Exception as exc:
-                logger.warning("Bank %s sync failed (may need re-auth): %s", conn["provider_name"], exc)
+                logger.warning("Bank %s sync failed: %s", conn["provider_name"], exc)
         try:
             sub_svc.refresh_subscriptions()
         except Exception:
             logger.exception("refresh_subscriptions failed")
+        try:
+            db.reconcile_locked_bills()  # a fresh bank payment may auto-clear a locked bill
+        except Exception:
+            logger.exception("reconcile_locked_bills failed")
     else:
         logger.info("Open Banking not configured — skipping")
 

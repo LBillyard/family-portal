@@ -16,6 +16,17 @@ def _parse_dt(s: str) -> datetime | None:
         return None
 
 
+def _trip_ended(trip: dict) -> bool:
+    """A trip is over when its end (or start, if end is unset) is in the past."""
+    ref = trip.get("end") or trip.get("start")
+    if not ref:
+        return False
+    try:
+        return date.fromisoformat(str(ref)[:10]) < date.today()
+    except (ValueError, TypeError):
+        return False
+
+
 def build_dashboard() -> dict:
     users = [db.user_public(u) for u in db.list_users()]
     events = db.list_events()
@@ -31,7 +42,7 @@ def build_dashboard() -> dict:
     upcoming_events = []
     for e in events:
         dt = _parse_dt(e["start"])
-        if dt and dt >= now - timedelta(days=1) and (e.get("all_day") or dt <= week_end):
+        if dt and dt >= now - timedelta(days=1) and dt <= week_end:
             upcoming_events.append(e)
     upcoming_events = upcoming_events[:6]
 
@@ -41,9 +52,10 @@ def build_dashboard() -> dict:
         if a["status"] == "upcoming" and (_parse_dt(a["datetime"]) or now) >= now - timedelta(days=1)
     ][:4]
 
-    next_holiday = next((t for t in trips if t["status"] == "booked" and t.get("days_until") is not None), None)
-    if not next_holiday and trips:
-        next_holiday = trips[0]
+    active_trips = [t for t in trips if not _trip_ended(t)]
+    next_holiday = next((t for t in active_trips if t["status"] == "booked" and t.get("days_until") is not None), None)
+    if not next_holiday and active_trips:
+        next_holiday = active_trips[0]
 
     reminders = _build_reminders(appointments, bills, documents)
     doc_alerts = [d for d in documents if d.get("status") == "renew_soon"]
@@ -75,8 +87,19 @@ def _build_reminders(appointments, bills, documents) -> list[dict]:
             reminders.append({"id": a["id"], "text": f"{a['title']} tomorrow", "type": "appointment", "when": "Tomorrow"})
 
     for b in bills:
-        if not b["paid"] and b["due_day"] <= today.day + 14:
-            reminders.append({"id": b["id"], "text": f"{b['name']} due soon", "type": "bill", "when": f"Day {b['due_day']}"})
+        if b["paid"]:
+            continue
+        # Next real occurrence: this month if the day hasn't passed, else next month
+        # (day clamped to 28 for short months — mirrors renewals).
+        day = min(b["due_day"], 28)
+        due = today.replace(day=day)
+        if due < today:
+            if today.month == 12:
+                due = date(today.year + 1, 1, day)
+            else:
+                due = date(today.year, today.month + 1, day)
+        if (due - today).days <= 14:
+            reminders.append({"id": b["id"], "text": f"{b['name']} due soon", "type": "bill", "when": f"{due.day} {due.strftime('%b')}"})
 
     for d in documents:
         if d.get("status") == "renew_soon":

@@ -122,7 +122,8 @@ def verify_webhook(mode: str, token: str, challenge: str) -> str | None:
 def verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
     app_secret = os.environ.get("WHATSAPP_APP_SECRET", "").strip()
     if not app_secret:
-        return True
+        logger.warning("WHATSAPP_APP_SECRET not set — rejecting webhook (cannot verify signature)")
+        return False
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     expected = hmac.new(app_secret.encode(), raw_body, hashlib.sha256).hexdigest()

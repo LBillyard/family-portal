@@ -7,6 +7,8 @@ import tempfile
 _TMP_DB = os.path.join(tempfile.mkdtemp(prefix="familyportal-test-"), "test.db")
 os.environ["FAMILY_PORTAL_DB"] = _TMP_DB
 os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production-use-only")
+# Deterministic seed password (unset → a random one is generated and logged).
+os.environ["FAMILY_PORTAL_SEED_PASSWORD"] = "family123"
 # http scheme → session cookie isn't Secure, so TestClient (http://testserver) resends it.
 os.environ["PUBLIC_URL"] = "http://testserver"
 

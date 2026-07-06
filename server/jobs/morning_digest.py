@@ -27,7 +27,11 @@ logger = logging.getLogger("morning_digest")
 
 async def run() -> int:
     if not whatsapp.is_configured():
-        logger.warning("WhatsApp not configured — set WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID. Skipping.")
+        if whatsapp.provider() == "twilio":
+            needed = "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM"
+        else:
+            needed = "WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID"
+        logger.warning("WhatsApp (%s) not configured — set %s. Skipping.", whatsapp.provider(), needed)
         return 0
     sent = 0
     weather_line = await weather_svc.today_line()  # same location for the whole household

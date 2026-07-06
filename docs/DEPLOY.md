@@ -8,7 +8,7 @@ This guide covers AWS EC2 deployment (cheapest layout) and manual Ubuntu install
 
 ## Pre-deploy checklist
 
-- [ ] Change default login passwords (or add password-change flow)
+- [ ] Decide the seed password: set `FAMILY_PORTAL_SEED_PASSWORD` in `.env` before first start, or grab the auto-generated one logged at seed time (`journalctl -u family-portal`), then rotate via Settings → change password
 - [ ] Generate `SECRET_KEY`: `python -c "import secrets; print(secrets.token_hex(32))"`
 - [ ] Create [Google OAuth credentials](https://console.cloud.google.com/apis/credentials) with redirect URI matching your public URL
 - [ ] Add `OPENROUTER_API_KEY` if using AI holiday ideas
@@ -75,6 +75,7 @@ journalctl -u family-portal -f
 ## Option B — Manual upload to existing EC2
 
 ```powershell
+ssh -i YOUR_KEY.pem ubuntu@YOUR_IP "mkdir -p /tmp/family-upload"
 scp -i YOUR_KEY.pem -r server shared deploy requirements.txt ubuntu@YOUR_IP:/tmp/family-upload/
 ```
 
@@ -98,9 +99,37 @@ sudo bash /opt/family-portal/deploy/install-ubuntu.sh
 The install script:
 
 - Creates Python venv and installs `requirements.txt`
-- Generates `.env` with random `SECRET_KEY` if missing
-- Installs `family-portal.service` systemd unit
-- Opens port 8090 in ufw
+- Generates `.env` with random `SECRET_KEY` plus `PUBLIC_URL`, `GOOGLE_REDIRECT_URI` and `TRUELAYER_REDIRECT_URI` if missing
+- Installs `family-portal.service` **and** the three timers (`family-portal-digest`, `family-portal-sync`, `family-portal-task-reminders`) and enables them
+- Opens the app port in ufw (default 8090; override with `PORT=` — the script patches the systemd unit to match)
+
+---
+
+## Routine deploys (updating the live box)
+
+The box is **NOT a git repo** — a deploy is just copying changed files and restarting:
+
+```powershell
+ssh -i YOUR_KEY.pem ubuntu@YOUR_IP "mkdir -p /tmp/family-upload"
+scp -i YOUR_KEY.pem -r server shared ubuntu@YOUR_IP:/tmp/family-upload/
+ssh -i YOUR_KEY.pem ubuntu@YOUR_IP "sudo rsync -a /tmp/family-upload/ /opt/family-portal/ && sudo systemctl restart family-portal"
+```
+
+Checklist for **every** deploy:
+
+- [ ] **Frontend changed?** Bump the `?v=` cache-bust on the script/style links in `server/static/index.html` **and** the `CACHE` constant in `server/static/sw.js` — otherwise the service worker keeps serving stale assets
+- [ ] `sudo systemctl restart family-portal` after files land
+- [ ] Unit/timer file changed? Copy it to `/etc/systemd/system/`, then `sudo systemctl daemon-reload` and re-enable
+
+Background timers on the box (installed by `install-ubuntu.sh`):
+
+| Timer | Schedule | Job |
+|-------|----------|-----|
+| `family-portal-digest.timer` | 07:00 Europe/London | WhatsApp morning digest |
+| `family-portal-sync.timer` | hourly | Google Calendar + bank sync |
+| `family-portal-task-reminders.timer` | every 15 min | task reminder WhatsApp pings |
+
+Check them with `systemctl list-timers 'family-portal-*'`.
 
 ---
 

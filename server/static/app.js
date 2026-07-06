@@ -31,6 +31,8 @@ let tripFilter = 'all';
 let calView = 'month';
 let calCursor = null;
 let activeModalKey = null;
+// Calendar member filter — user ids whose events are hidden (shared/null events always show).
+const calFilterHidden = new Set();
 
 async function api(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
@@ -39,12 +41,20 @@ async function api(path, options = {}) {
     ...options,
   });
   if (res.status === 401 && !path.includes('/auth/')) {
+    currentUser = null;
     showLogin();
     throw new Error('Unauthorized');
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || res.statusText);
+    let detail = err.detail;
+    if (Array.isArray(detail)) {
+      // FastAPI 422 validation errors: [{loc: [...], msg: '...'}]
+      detail = detail.map((d) => `${(d.loc || []).join('.')}: ${d.msg}`).join('; ');
+    } else if (detail && typeof detail === 'object') {
+      detail = JSON.stringify(detail);
+    }
+    throw new Error(detail || res.statusText);
   }
   if (res.status === 204) return null;
   return res.json();
@@ -118,11 +128,38 @@ const fmt = {
   },
 };
 
+// Only allow real hex colours into style="" attributes — anything else falls back.
+function safeColour(c, fallback = '#718096') {
+  return /^#[0-9a-fA-F]{3,8}$/.test(c || '') ? c : fallback;
+}
+
 function userColour(users, id) {
-  return users.find((u) => u.id === id)?.colour || '#718096';
+  return safeColour(users.find((u) => u.id === id)?.colour);
 }
 function userName(users, id) {
-  return esc(users.find((u) => u.id === id)?.name || id);
+  // null/undefined id = shared between the household
+  return esc(users.find((u) => u.id === id)?.name || id || 'Both');
+}
+
+// Resolve a display name picked in a modal back to a user id; 'Both'/'Either' → null (shared).
+function resolveUserIdByName(name) {
+  const users = store.dashboard?.users || [];
+  return users.find((u) => u.name === name)?.id ?? null;
+}
+
+// Option list for assignee selects — built at openModal time so renames propagate.
+// A shared option ('Both'/'Either') is only offered where the backend column is
+// nullable (tasks); events/appointments have a NOT NULL owner, so pass no label.
+function userOptionList(sharedLabel) {
+  const users = store.dashboard?.users || [];
+  const names = users.map((u) => u.name);
+  return sharedLabel ? [...names, sharedLabel] : names;
+}
+
+function todayIsoDate(plusDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + plusDays);
+  return d.toISOString().slice(0, 10);
 }
 
 const MODALS = {
@@ -131,9 +168,9 @@ const MODALS = {
     desc: 'Creates a portal event and optionally syncs to Google Calendar.',
     fields: [
       { label: 'Title', type: 'text', placeholder: 'e.g. Date night' },
-      { label: 'Date', type: 'date', value: '' },
+      { label: 'Date', type: 'date', value: () => todayIsoDate() },
       { label: 'Time', type: 'time', value: '19:00' },
-      { label: 'Assigned to', type: 'select', options: ['Luke', 'Laura', 'Both'] },
+      { label: 'Assigned to', type: 'select', options: () => userOptionList() },
       { label: 'Location', type: 'text', value: '' },
       { label: 'Google calendar', type: 'select', options: ['Default'] },
     ],
@@ -145,8 +182,8 @@ const MODALS = {
       { label: 'Description', type: 'text', placeholder: 'e.g. Weekly shop' },
       { label: 'Amount (£)', type: 'number', value: '' },
       { label: 'Category', type: 'select', options: ['Groceries', 'Transport', 'Eating out', 'Income'] },
-      { label: 'Account', type: 'select', options: ['Joint current', 'Luke personal', 'Partner personal'] },
-      { label: 'Date', type: 'date', value: '2026-07-05' },
+      { label: 'Account', type: 'select', options: [] },
+      { label: 'Date', type: 'date', value: () => todayIsoDate() },
     ],
   },
   'add-bill': {
@@ -156,7 +193,8 @@ const MODALS = {
       { label: 'Bill name', type: 'text', placeholder: 'e.g. Spotify' },
       { label: 'Amount (£)', type: 'number', value: '' },
       { label: 'Due day of month', type: 'number', value: '1' },
-      { label: 'Category', type: 'select', options: ['Utilities', 'Subscriptions', 'Housing', 'Transport'] },
+      { label: 'Category', type: 'select', options: () => BILL_CATEGORIES },
+      { label: 'Recurrence', type: 'select', options: ['monthly', 'quarterly', 'yearly', 'weekly'] },
     ],
   },
   'add-appointment': {
@@ -166,6 +204,8 @@ const MODALS = {
       { label: 'Title', type: 'text', placeholder: 'e.g. GP appointment' },
       { label: 'Provider', type: 'text', placeholder: 'e.g. Oakwood Medical' },
       { label: 'Date & time', type: 'datetime-local', value: '' },
+      { label: 'Location', type: 'text', placeholder: 'e.g. High Street surgery' },
+      { label: 'Person', type: 'select', options: () => userOptionList() },
       { label: 'Category', type: 'select', options: ['Health', 'Dental', 'Car', 'Vet'] },
       { label: 'Remind me (days before)', type: 'number', value: '2' },
     ],
@@ -175,8 +215,8 @@ const MODALS = {
     desc: 'Household to-do assigned to one or both of you.',
     fields: [
       { label: 'Task', type: 'text', placeholder: 'e.g. Book airport parking' },
-      { label: 'Assign to', type: 'select', options: ['Luke', 'Laura', 'Either'] },
-      { label: 'Due date', type: 'date', value: '2026-07-10' },
+      { label: 'Assign to', type: 'select', options: () => userOptionList('Either') },
+      { label: 'Due date', type: 'date', value: () => todayIsoDate(3) },
       { label: 'Priority', type: 'select', options: ['High', 'Medium', 'Low'] },
       { label: 'Remind me', type: 'datetime-local', value: '' },
     ],
@@ -189,6 +229,7 @@ const MODALS = {
       { label: 'Destination', type: 'text', placeholder: 'e.g. Barcelona, Spain — used for weather' },
       { label: 'Status', type: 'select', options: ['Idea', 'Planning', 'Booked'] },
       { label: 'Start date', type: 'date', value: '' },
+      { label: 'End date', type: 'date', value: '' },
       { label: 'Budget (£)', type: 'number', value: '800' },
     ],
   },
@@ -224,29 +265,23 @@ const MODALS = {
   },
 };
 
-// Actions still awaiting a real implementation — trimmed batch by batch.
-const ACTION_MSG = {
-  transfer: 'Transfer between accounts — coming next',
-  'export-transactions': 'CSV export — coming next',
-  'sync-appointments': 'Appointment → calendar sync — coming next',
-  'compare-trips': 'Trip comparison — coming next',
-  'edit-trip': 'Edit trip — coming next',
-  'edit-member': 'Edit member — coming next',
-};
-
 function showToast(msg, isError = false) {
   document.querySelectorAll('.toast').forEach((t) => t.remove());
   const el = document.createElement('div');
   el.className = 'toast';
   el.innerHTML = isError
     ? `<strong style="color:#f87171">Error:</strong> ${esc(msg)}`
-    : `<strong>Saved:</strong> ${esc(msg)}`;
+    : esc(msg);
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3200);
 }
 
 function showLogin() {
   document.getElementById('login-overlay').hidden = false;
+  // Only show the dismiss button when a signed-in user is previewing the screen —
+  // an unauthenticated visitor must not be able to reveal the app shell.
+  const closeBtn = document.getElementById('login-close');
+  if (closeBtn) closeBtn.hidden = !currentUser;
 }
 
 function hideLogin() {
@@ -261,13 +296,16 @@ function openModal(key) {
   closeNotif();
   const fields = def.fields
     .map((f) => {
+      // Values/options can be functions so defaults (today's date, live user list) are computed at open time.
+      const val = typeof f.value === 'function' ? f.value() : f.value;
       if (f.type === 'select') {
-        return `<label>${f.label}<select>${f.options.map((o) => `<option>${o}</option>`).join('')}</select></label>`;
+        const opts = typeof f.options === 'function' ? f.options() : f.options;
+        return `<label>${f.label}<select data-key="${esc(f.label)}">${opts.map((o) => `<option>${esc(o)}</option>`).join('')}</select></label>`;
       }
       if (f.type === 'textarea') {
-        return `<label>${f.label}<textarea rows="3">${f.value || ''}</textarea></label>`;
+        return `<label>${f.label}<textarea rows="3" data-key="${esc(f.label)}">${esc(val || '')}</textarea></label>`;
       }
-      return `<label>${f.label}<input type="${f.type}" value="${f.value || ''}" placeholder="${f.placeholder || ''}"></label>`;
+      return `<label>${f.label}<input type="${f.type}" data-key="${esc(f.label)}" value="${esc(val || '')}" placeholder="${esc(f.placeholder || '')}"></label>`;
     })
     .join('');
 
@@ -308,9 +346,19 @@ function openModal(key) {
   if (key === 'log-expense') {
     const accountLabel = [...document.querySelectorAll('.wf-modal label')].find((l) => l.textContent.trim().startsWith('Account'));
     const sel = accountLabel?.querySelector('select');
-    const accounts = (store.finances?.accounts || []).filter((a) => a.type === 'current' || a.type === 'savings');
-    if (sel && accounts.length) {
-      sel.innerHTML = accounts.map((a) => `<option>${esc(a.name)}</option>`).join('');
+    const all = store.finances?.accounts || [];
+    const preferred = all.filter((a) => a.type === 'current' || a.type === 'savings');
+    const accounts = preferred.length ? preferred : all;
+    if (sel) {
+      if (accounts.length) {
+        sel.innerHTML = accounts.map((a) => `<option>${esc(a.name)}</option>`).join('');
+      } else {
+        sel.innerHTML = '<option value="">No accounts yet</option>';
+        sel.disabled = true;
+        const saveBtn = document.getElementById('modal-save');
+        if (saveBtn) saveBtn.disabled = true;
+        accountLabel.insertAdjacentHTML('beforeend', '<span class="hint-small">Connect a bank or import a CSV first</span>');
+      }
     }
   }
 }
@@ -319,11 +367,10 @@ function readModalFields() {
   const modal = document.querySelector('.wf-modal');
   if (!modal) return {};
   const data = {};
-  modal.querySelectorAll('label').forEach((label) => {
-    const input = label.querySelector('input, select, textarea');
-    if (!input) return;
-    const key = label.textContent.trim();
-    data[key] = input.value;
+  // Key by the explicit data-key, NOT label.textContent — a <select>'s option
+  // text is part of the label's textContent, which would corrupt the key.
+  modal.querySelectorAll('[data-key]').forEach((input) => {
+    data[input.dataset.key] = input.value;
   });
   return data;
 }
@@ -333,9 +380,12 @@ async function submitModal(key) {
   try {
     if (key === 'add-event') {
       const dateVal = f['Date'];
+      if (!dateVal) {
+        showToast('Pick a date', true);
+        return; // keep the modal open so nothing is lost
+      }
       const timeVal = f['Time'] || '09:00';
       const start = dateVal.includes('T') ? dateVal : `${dateVal}T${timeVal}:00`;
-      const assignee = (f['Assigned to'] || 'Luke').toLowerCase();
       const calChoice = f['Google calendar'];
       await api('/events', {
         method: 'POST',
@@ -343,7 +393,7 @@ async function submitModal(key) {
           title: f['Title'],
           start,
           end: start,
-          user_id: assignee.includes('laura') ? 'partner' : 'luke',
+          user_id: resolveUserIdByName(f['Assigned to']),
           location: f['Location'] || null,
           google_account_id: calChoice && calChoice !== 'Default' ? calChoice : null,
         }),
@@ -370,6 +420,7 @@ async function submitModal(key) {
           amount: parseFloat(f['Amount (£)'] || 0),
           due_day: parseInt(f['Due day of month'], 10),
           category: f['Category'],
+          recurrence: f['Recurrence'] || 'monthly',
         }),
       });
     } else if (key === 'add-appointment') {
@@ -379,17 +430,18 @@ async function submitModal(key) {
           title: f['Title'],
           provider: f['Provider'],
           datetime: f['Date & time'],
+          location: f['Location'] || null,
+          user_id: resolveUserIdByName(f['Person']),
           category: (f['Category'] || 'health').toLowerCase(),
           reminder_days: parseInt(f['Remind me (days before)'] || 2, 10),
         }),
       });
     } else if (key === 'add-task') {
-      const assignee = (f['Assign to'] || 'Luke').toLowerCase();
       await api('/tasks', {
         method: 'POST',
         body: JSON.stringify({
           title: f['Task'],
-          assignee_id: assignee.includes('laura') ? 'partner' : 'luke',
+          assignee_id: resolveUserIdByName(f['Assign to']),
           due: f['Due date'] || null,
           priority: (f['Priority'] || 'medium').toLowerCase(),
           remind_at: f['Remind me'] || null,
@@ -403,7 +455,7 @@ async function submitModal(key) {
           destination: f['Destination'] || null,
           status: (f['Status'] || 'idea').toLowerCase(),
           start: f['Start date'] || null,
-          end: null,
+          end: f['End date'] || null,
           budget: parseFloat(f['Budget (£)'] || 0),
         }),
       });
@@ -422,11 +474,11 @@ async function submitModal(key) {
       return;
     } else {
       closeModal();
-      showToast(ACTION_MSG[key] || 'Coming soon');
+      showToast('Coming soon');
       return;
     }
     closeModal();
-    showToast(MODALS[key].title);
+    showToast(`${MODALS[key].title} — saved`);
     await load();
   } catch (err) {
     showToast(err.message, true);
@@ -448,10 +500,10 @@ async function openConnectBankModal() {
     const tiles = (data.providers || [])
       .map(
         (p) => `
-      <button type="button" class="bank-provider-tile wf-action" data-action="connect-bank-provider" data-provider-id="${p.id}">
-        <strong>${p.name}</strong>
+      <button type="button" class="bank-provider-tile wf-action" data-action="connect-bank-provider" data-provider-id="${esc(p.id)}">
+        <strong>${esc(p.name)}</strong>
         <span>${p.kind === 'card' ? 'Credit card' : 'Current account'}</span>
-        ${p.note ? `<small>${p.note}</small>` : ''}
+        ${p.note ? `<small>${esc(p.note)}</small>` : ''}
       </button>`
       )
       .join('');
@@ -636,11 +688,23 @@ function openEditTripModal(tripId) {
         <label class="field field-full"><span>Spent (£)</span><input type="number" id="et-spent" min="0" step="1" value="${trip.spent || 0}"></label>
       </div>
       <div class="wf-modal-footer">
+        <button type="button" class="btn btn-ghost" id="et-delete" style="margin-right:auto">Delete</button>
         <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
         <button type="button" class="btn btn-primary" id="et-save">Save</button>
       </div>
     </div>`;
   document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('et-delete').onclick = async () => {
+    if (!confirm('Delete this trip? Its checklist, packing list and document links go too.')) return;
+    try {
+      await api(`/holidays/trips/${tripId}`, { method: 'DELETE' });
+      closeModal();
+      showToast('Trip deleted');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
   document.getElementById('et-save').onclick = async () => {
     try {
       await api(`/holidays/trips/${tripId}`, {
@@ -674,7 +738,7 @@ function openEditMemberModal(userId) {
       <div class="wf-modal-header"><h3>Edit ${esc(user.name)}</h3><p>Name, colour and WhatsApp number for reminders.</p></div>
       <div class="wf-modal-body">
         <label class="field field-full"><span>Name</span><input type="text" id="em-name" value="${esc(user.name)}"></label>
-        <label class="field field-full"><span>Colour</span><input type="color" id="em-colour" value="${user.colour || '#00a89e'}"></label>
+        <label class="field field-full"><span>Colour</span><input type="color" id="em-colour" value="${safeColour(user.colour, '#00a89e')}"></label>
         <label class="field field-full"><span>WhatsApp number</span><input type="tel" id="em-phone" value="${esc(user.phone || '')}" placeholder="+44 7911 123456"></label>
         <p style="font-size:0.8125rem;color:var(--text-muted);margin:2px 2px 0">Used for the morning digest and two-way chat. Include the country code.</p>
       </div>
@@ -838,7 +902,7 @@ function renderMembers(users) {
     chips.innerHTML = users
       .map(
         (u) =>
-          `<span class="member-chip"><span class="member-dot" style="background:${esc(u.colour)}"></span>${esc(u.name)}${u.google_connected ? ' · Google ✓' : ''}</span>`
+          `<span class="member-chip"><span class="member-dot" style="background:${safeColour(u.colour)}"></span>${esc(u.name)}${u.google_connected ? ' · Google ✓' : ''}</span>`
       )
       .join('');
   }
@@ -846,9 +910,9 @@ function renderMembers(users) {
   document.getElementById('cal-filters').innerHTML = users
     .map(
       (u) =>
-        `<label class="filter-chip"><input type="checkbox" checked><span style="display:inline-flex;align-items:center;gap:6px"><span class="member-dot" style="background:${esc(u.colour)}"></span>${esc(u.name)}</span></label>`
+        `<label class="filter-chip"><input type="checkbox" data-user-id="${esc(u.id)}"${calFilterHidden.has(u.id) ? '' : ' checked'}><span style="display:inline-flex;align-items:center;gap:6px"><span class="member-dot" style="background:${safeColour(u.colour)}"></span>${esc(u.name)}</span></label>`
     )
-    .join('') + '<label class="filter-chip"><input type="checkbox" checked><span>Shared</span></label>';
+    .join('');
 }
 
 function renderWelcome(data) {
@@ -910,7 +974,7 @@ function taskRowInner(users, t) {
           ${userName(users, t.assignee)}
           ${t.due ? `· Due ${fmt.date(t.due)}` : ''}
           ${remindLabel ? `· ${remindLabel}` : ''}
-          <span class="priority-tag ${t.priority}">${t.priority}</span>
+          <span class="priority-tag ${esc(t.priority)}">${esc(t.priority)}</span>
         </div>
       </div>
       <button class="task-edit-btn wf-action" data-action="edit-task" data-task-id="${t.id}" title="Edit task" aria-label="Edit task">✎</button>`;
@@ -922,7 +986,8 @@ function taskRow(users, t) {
 
 // Inline edit form that replaces a task row's contents in place (no modal).
 function taskEditInner(users, t) {
-  const userOpts = users.map((u) => `<option value="${u.id}"${u.id === t.assignee ? ' selected' : ''}>${esc(u.name)}</option>`).join('');
+  const userOpts = users.map((u) => `<option value="${u.id}"${u.id === t.assignee ? ' selected' : ''}>${esc(u.name)}</option>`).join('')
+    + `<option value=""${!t.assignee ? ' selected' : ''}>Both</option>`;
   const priOpts = ['high', 'medium', 'low'].map((p) => `<option value="${p}"${p === t.priority ? ' selected' : ''}>${p}</option>`).join('');
   return `
     <div class="row-edit" data-task-id="${t.id}">
@@ -1020,6 +1085,113 @@ function billEditInner(b) {
     </div>`;
 }
 
+function findBudget(cat) {
+  return (store.finances?.budgets || []).find((b) => String(b.category) === String(cat));
+}
+
+function findSavings(id) {
+  return (store.finances?.savings_goals || []).find((g) => String(g.id) === String(id));
+}
+
+function budgetRowInner(b) {
+  const pct = b.limit > 0 ? Math.round((b.spent / b.limit) * 100) : 0;
+  const cls = pct >= 100 ? 'over' : pct >= 85 ? 'warn' : '';
+  return `
+    <div class="budget-row-head">
+      <span>${esc(b.category)}</span>
+      <span class="bill-row-actions">
+        <span class="${pct >= 100 ? 'over' : ''}">${fmt.gbp(b.spent)} / ${fmt.gbp(b.limit)}</span>
+        <button type="button" class="bill-edit-btn wf-action" data-action="edit-budget" data-budget-cat="${esc(b.category)}" title="Edit limit">✎</button>
+        <button type="button" class="bill-edit-btn wf-action" data-action="delete-budget" data-budget-cat="${esc(b.category)}" title="Remove">🗑</button>
+      </span>
+    </div>
+    <div class="progress-bar budget"><div class="progress-fill ${cls}" style="width:${Math.min(pct, 100)}%"></div></div>`;
+}
+
+function budgetRow(b) {
+  return `<div class="budget-item" data-budget-cat="${esc(b.category)}">${budgetRowInner(b)}</div>`;
+}
+
+function budgetEditInner(b) {
+  return `
+    <div class="row-edit" data-budget-cat="${esc(b.category)}">
+      <div class="row-edit-fields">
+        <label>${esc(b.category)} — monthly limit £<input type="number" step="0.01" min="0" data-f="monthly_limit" value="${b.limit}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-budget-inline" data-budget-cat="${esc(b.category)}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-budget-inline" data-budget-cat="${esc(b.category)}">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function budgetAddInner(cats) {
+  const opts = cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  if (!opts) return '<p class="hint-small">Every spending category already has a budget.</p>';
+  return `
+    <div class="row-edit" id="budget-add-form">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${opts}</select></label>
+        <label>Monthly limit £<input type="number" step="0.01" min="0" data-f="monthly_limit" value=""></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-budget-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="finance-budgets">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function savingsRowInner(g) {
+  const pct = g.target > 0 ? Math.round((g.current / g.target) * 100) : 0;
+  return `
+    <div class="savings-head">
+      <h4>${esc(g.name)}</h4>
+      <span class="bill-row-actions">
+        <button type="button" class="bill-edit-btn wf-action" data-action="edit-savings" data-goal-id="${g.id}" title="Edit">✎</button>
+        <button type="button" class="bill-edit-btn wf-action" data-action="delete-savings" data-goal-id="${g.id}" title="Remove">🗑</button>
+      </span>
+    </div>
+    <div class="savings-amounts"><strong>${fmt.gbp(g.current)}</strong><span>of ${fmt.gbp(g.target)}</span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:${Math.min(pct, 100)}%;background:${safeColour(g.colour, 'var(--accent)')}"></div></div>`;
+}
+
+function savingsRow(g) {
+  return `<div class="savings-card" data-goal-id="${g.id}">${savingsRowInner(g)}</div>`;
+}
+
+function savingsEditInner(g) {
+  return `
+    <div class="row-edit" data-goal-id="${g.id}">
+      <input type="text" class="te-input" data-f="name" value="${esc(g.name)}" placeholder="Goal name">
+      <div class="row-edit-fields">
+        <label>Target £<input type="number" step="0.01" min="0" data-f="target" value="${g.target}"></label>
+        <label>Saved £<input type="number" step="0.01" min="0" data-f="current" value="${g.current}"></label>
+        <label>Colour<input type="color" data-f="colour" value="${safeColour(g.colour, '#00a89e')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-savings-inline" data-goal-id="${g.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-savings-inline" data-goal-id="${g.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-savings-inline" data-goal-id="${g.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function savingsAddInner() {
+  return `
+    <div class="row-edit" id="savings-add-form">
+      <input type="text" class="te-input" data-f="name" value="" placeholder="Goal name (e.g. New car)">
+      <div class="row-edit-fields">
+        <label>Target £<input type="number" step="0.01" min="0" data-f="target" value=""></label>
+        <label>Saved £<input type="number" step="0.01" min="0" data-f="current" value="0"></label>
+        <label>Colour<input type="color" data-f="colour" value="#00a89e"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-savings-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="finance-savings">Cancel</button>
+      </div>
+    </div>`;
+}
+
 function renderHome(data) {
   const { users, upcoming_events, upcoming_bills, upcoming_appointments, next_holiday, finance_summary, tasks, documents } = data;
 
@@ -1027,7 +1199,7 @@ function renderHome(data) {
     <div class="stat"><span>${upcoming_events.length}</span><label>Events this week</label><div class="stat-trend up">${upcoming_events.filter((e) => e.source === 'google').length} from Google</div></div>
     <div class="stat"><span>${upcoming_bills.length}</span><label>Bills due</label><div class="stat-trend neutral">${fmt.gbp(finance_summary.bills_due_this_month)} total</div></div>
     <div class="stat"><span>${upcoming_appointments.length}</span><label>Appointments</label><div class="stat-trend neutral">Next: ${fmt.date(upcoming_appointments[0]?.datetime)}</div></div>
-    <div class="stat"><span>${next_holiday?.days_until ?? '—'}</span><label>Days to holiday</label><div class="stat-trend up">${next_holiday?.title || ''}</div></div>`;
+    <div class="stat"><span>${next_holiday?.days_until ?? '—'}</span><label>Days to holiday</label><div class="stat-trend up">${esc(next_holiday?.title || '')}</div></div>`;
 
   document.getElementById('home-events').innerHTML = upcoming_events
     .map((e) => {
@@ -1038,12 +1210,12 @@ function renderHome(data) {
         <div class="list-item-body">
           <div class="list-item-title">${esc(e.title)}</div>
           <div class="list-item-meta">${fmt.date(e.start)} · ${userName(users, e.user_id)}${e.location ? ` · ${esc(e.location)}` : ''}
-            <span class="source-tag ${e.source}">${e.source}</span></div>
+            <span class="source-tag ${esc(e.source)}">${esc(e.source)}</span></div>
         </div>
         <span class="member-dot" style="background:${col};margin-top:6px"></span>
       </div>`;
     })
-    .join('');
+    .join('') || '<p class="hint-small">No events this week — tap + Add to create one.</p>';
 
   document.getElementById('home-tasks').innerHTML = tasks
     .slice(0, 4)
@@ -1065,18 +1237,20 @@ function renderHome(data) {
       </div>
     </div>`
     )
-    .join('');
+    .join('') || '<p class="hint-small">No appointments in the next 7 days.</p>';
 
   if (next_holiday) {
     const done = next_holiday.checklist?.filter((c) => c.done).length || 0;
     const total = next_holiday.checklist?.length || 0;
     document.getElementById('home-holiday').innerHTML = `
-      <div class="holiday-countdown">${next_holiday.days_until} days</div>
+      ${next_holiday.days_until != null ? `<div class="holiday-countdown">${next_holiday.days_until} days</div>` : ''}
       <p style="font-size:1rem;font-weight:600;color:var(--navy-900);margin:8px 0 4px">${esc(next_holiday.title)}</p>
       <p style="font-size:0.875rem;color:var(--text-muted)">${fmt.date(next_holiday.start)} → ${fmt.date(next_holiday.end)}</p>
       ${total ? `<p style="font-size:0.8125rem;color:var(--text-muted);margin-top:10px">Checklist: ${done}/${total} done</p>
         <div class="progress-bar"><div class="progress-fill" style="width:${Math.round((done / total) * 100)}%"></div></div>` : ''}
-      <span class="status-tag booked" style="margin-top:12px;display:inline-block">${next_holiday.status}</span>`;
+      <span class="status-tag booked" style="margin-top:12px;display:inline-block">${esc(next_holiday.status)}</span>`;
+  } else {
+    document.getElementById('home-holiday').innerHTML = '<p class="hint-small">No trips planned — add one on the Holidays tab.</p>';
   }
 
   document.getElementById('home-documents').innerHTML = documents.length
@@ -1095,7 +1269,12 @@ function renderHome(data) {
         .join('')
     : '<p class="hint-small">All documents up to date</p>';
 
-  const spentPct = Math.round((finance_summary.monthly_spent / finance_summary.monthly_income) * 100);
+  const financeSub = document.getElementById('home-finance-sub');
+  if (financeSub) financeSub.textContent = `Income vs spending · ${new Date().toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}`;
+
+  const spentPct = finance_summary.monthly_income > 0
+    ? Math.round((finance_summary.monthly_spent / finance_summary.monthly_income) * 100)
+    : 0;
   document.getElementById('home-finance').innerHTML = `
     <div class="two-col" style="gap:32px">
       <div>
@@ -1103,8 +1282,8 @@ function renderHome(data) {
           <span style="font-size:0.875rem;color:var(--text-muted)">Spent this month</span>
           <span style="font-weight:700">${fmt.gbp(finance_summary.monthly_spent)} / ${fmt.gbp(finance_summary.monthly_income)}</span>
         </div>
-        <div class="progress-bar"><div class="progress-fill" style="width:${spentPct}%"></div></div>
-        <div class="finance-split"><span>${spentPct}% of income</span><span>Savings: ${fmt.gbp(finance_summary.savings_total)}</span></div>
+        <div class="progress-bar"><div class="progress-fill" style="width:${finance_summary.monthly_income > 0 ? Math.min(spentPct, 100) : 0}%"></div></div>
+        <div class="finance-split"><span>${finance_summary.monthly_income > 0 ? `${spentPct}% of income` : '—'}</span><span>Savings: ${fmt.gbp(finance_summary.savings_total)}</span></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div class="stat" style="margin:0;padding:16px"><span style="font-size:1.5rem">${fmt.gbp(finance_summary.joint_balance)}</span><label>Joint</label></div>
@@ -1154,6 +1333,7 @@ function openEventDetailModal(id) {
     }</div></div>`
   );
   if (e.description) rows.push(`<div class="ev-row"><span class="ev-ico">📝</span><div style="white-space:pre-wrap">${esc(e.description)}</div></div>`);
+  const editable = e.source !== 'google';
   document.getElementById('modal-root').innerHTML = `
     <div class="modal-backdrop" id="modal-backdrop"></div>
     <div class="wf-modal" role="dialog">
@@ -1161,13 +1341,71 @@ function openEventDetailModal(id) {
         <h3>${esc(e.title)}</h3><p>${e.source === 'google' ? 'From Google Calendar' : 'Portal event'}</p>
       </div>
       <div class="wf-modal-body ev-detail">${rows.join('')}</div>
-      <div class="wf-modal-footer"><button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Close</button></div>
+      <div class="wf-modal-footer">
+        ${editable ? `<button type="button" class="btn btn-ghost wf-action" data-action="delete-event" data-event-id="${esc(e.id)}" style="margin-right:auto">Delete</button>` : ''}
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Close</button>
+        ${editable ? `<button type="button" class="btn btn-primary wf-action" data-action="edit-event" data-event-id="${esc(e.id)}">Edit</button>` : ''}
+      </div>
     </div>`;
   document.getElementById('modal-backdrop').onclick = closeModal;
 }
 
+function openEditEventModal(id) {
+  const e = (store.calendar?.events || []).find((x) => String(x.id) === String(id));
+  if (!e) return showToast('Event not found', true);
+  if (e.source === 'google') return showToast('Google events are read-only here — edit them in Google Calendar', true);
+  const dateVal = (e.start || '').slice(0, 10);
+  const timeVal = e.all_day ? '' : (e.start || '').slice(11, 16);
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Edit event</h3><p>Portal events only — Google events stay read-only.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Title</span><input type="text" id="ee-title" value="${esc(e.title)}"></label>
+        <label class="field field-full"><span>Date</span><input type="date" id="ee-date" value="${esc(dateVal)}"></label>
+        <label class="field field-full"><span>Time <small>(leave empty for all-day)</small></span><input type="time" id="ee-time" value="${esc(timeVal)}"></label>
+        <label class="field field-full"><span>Location</span><input type="text" id="ee-location" value="${esc(e.location || '')}"></label>
+        <label class="field field-full"><span>Description</span><textarea id="ee-description" rows="3">${esc(e.description || '')}</textarea></label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="ee-save">Save</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('ee-save').onclick = async () => {
+    const title = document.getElementById('ee-title').value.trim();
+    const date = document.getElementById('ee-date').value;
+    const time = document.getElementById('ee-time').value;
+    if (!title) return showToast('Give the event a title', true);
+    if (!date) return showToast('Pick a date', true);
+    const allDay = !time;
+    const start = allDay ? date : `${date}T${time}:00`;
+    try {
+      await api(`/events/${e.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title,
+          start,
+          end: start,
+          all_day: allDay,
+          location: document.getElementById('ee-location').value.trim() || null,
+          description: document.getElementById('ee-description').value.trim() || null,
+        }),
+      });
+      closeModal();
+      showToast('Event updated');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
 function renderCalendar(data) {
-  const { users, events } = data;
+  const users = data.users || [];
+  // Member filter: hide events for unticked users; shared (null user_id) events always show.
+  const events = (data.events || []).filter((e) => e.user_id == null || !calFilterHidden.has(e.user_id));
   if (!calCursor) calCursor = new Date();
   const todayIso = calYmd(new Date());
 
@@ -1264,17 +1502,23 @@ function renderFinances(data) {
       <div class="card-header"><h3>Connected banks</h3><p>Open Banking — last sync pulls balances &amp; transactions</p></div>
       ${connections
         .map(
-          (c) => `
+          (c) => {
+            const needsReauth = c.status === 'needs_reauth';
+            return `
         <div class="connection-row">
           <div class="connection-info">
             <div class="connection-icon">🏦</div>
             <div>
               <div class="connection-name">${esc(c.provider_name)}</div>
-              <div class="connection-status connected">${c.last_synced_at ? 'Synced ' + fmt.datetime(c.last_synced_at) : 'Connected — tap Sync all banks'}</div>
+              <div class="connection-status ${needsReauth ? '' : 'connected'}">${needsReauth
+                ? '⚠️ Needs re-connect — sign in again to resume syncing'
+                : (c.last_synced_at ? 'Synced ' + fmt.datetime(c.last_synced_at) : 'Connected — tap Sync all banks')}</div>
             </div>
           </div>
+          ${needsReauth ? `<button class="btn btn-sm btn-primary wf-action" data-action="connect-bank-provider" data-provider-id="${esc(c.provider_id)}">Reconnect</button>` : ''}
           <button class="btn btn-sm btn-ghost wf-action" data-action="disconnect-bank" data-connection-id="${c.id}">Disconnect</button>
-        </div>`
+        </div>`;
+          }
         )
         .join('')}`;
   } else {
@@ -1303,32 +1547,17 @@ function renderFinances(data) {
     .map((b) => billRow(b))
     .join('') || '<p class="hint-small">No bills yet — add one above.</p>';
 
-  document.getElementById('finance-budgets').innerHTML = budgets
-    .map((b) => {
-      const pct = Math.round((b.spent / b.limit) * 100);
-      const cls = pct >= 100 ? 'over' : pct >= 85 ? 'warn' : '';
-      return `
-      <div>
-        <div class="budget-row-head">
-          <span>${esc(b.category)}</span>
-          <span class="${pct >= 100 ? 'over' : ''}">${fmt.gbp(b.spent)} / ${fmt.gbp(b.limit)}</span>
-        </div>
-        <div class="progress-bar budget"><div class="progress-fill ${cls}" style="width:${Math.min(pct, 100)}%"></div></div>
-      </div>`;
-    })
-    .join('');
+  const budgetedCats = new Set(budgets.map((b) => b.category));
+  document.getElementById('finance-budgets').innerHTML =
+    (budgets.map((b) => budgetRow(b)).join('') ||
+      '<p class="hint-small">No budgets yet — set a monthly target for a spending category.</p>') +
+    `<button class="acct-btn wf-action" data-action="add-budget">+ Budget</button>`;
+  window._budgetedCats = budgetedCats;
 
-  document.getElementById('finance-savings').innerHTML = savings_goals
-    .map((g) => {
-      const pct = Math.round((g.current / g.target) * 100);
-      return `
-      <div class="savings-card">
-        <h4>${esc(g.name)}</h4>
-        <div class="savings-amounts"><strong>${fmt.gbp(g.current)}</strong><span>of ${fmt.gbp(g.target)}</span></div>
-        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${g.colour}"></div></div>
-      </div>`;
-    })
-    .join('');
+  document.getElementById('finance-savings').innerHTML =
+    (savings_goals.map((g) => savingsRow(g)).join('') ||
+      '<p class="hint-small">No savings goals yet — add one to track progress.</p>') +
+    `<button class="acct-btn wf-action" data-action="add-savings">+ Goal</button>`;
 
   if (data.merged_recurring) {
     renderMergedRecurring(data.merged_recurring);
@@ -1347,7 +1576,7 @@ function renderFinances(data) {
       <td class="amount-cell ${t.amount >= 0 ? 'positive' : 'negative'}">${fmt.gbp(t.amount)}</td>
     </tr>`;
     })
-    .join('');
+    .join('') || '<tr><td colspan="5" class="hint-small">No transactions yet — log one, import a CSV or connect a bank.</td></tr>';
 
   renderCategoryBreakdown(category_breakdown);
 }
@@ -1399,7 +1628,7 @@ function renderAppointments(data, filter = 'all', category = 'all') {
       </td>
     </tr>`
     )
-    .join('');
+    .join('') || '<tr><td colspan="8" class="hint-small">No appointments here yet — tap New appointment to add one.</td></tr>';
 }
 
 function renderHolidays(data, filter = tripFilter) {
@@ -1410,10 +1639,10 @@ function renderHolidays(data, filter = tripFilter) {
     ? shownTrips
     .map((t) => {
       const checklist = (t.checklist || [])
-        .map((c) => `<li class="${c.done ? 'done' : ''}"><span class="checklist-box">${c.done ? '✓' : ''}</span>${esc(c.label)}</li>`)
+        .map((c) => `<li class="wf-action${c.done ? ' done' : ''}" data-action="toggle-checklist" data-trip-id="${t.id}" data-item-id="${esc(c.id ?? c.label)}" style="cursor:pointer" title="Tap to toggle"><span class="checklist-box">${c.done ? '✓' : ''}</span>${esc(c.label)}</li>`)
         .join('');
       const bookings = (t.bookings || [])
-        .map((b) => `<a href="#" class="booking-link wf-action" data-action="view-booking"><span>${b.type}: ${b.ref}</span><span>→</span></a>`)
+        .map((b) => `<a href="#" class="booking-link wf-action" data-action="view-booking"><span>${esc(b.type)}: ${esc(b.ref)}</span><span>→</span></a>`)
         .join('');
       const budgetPct = t.budget ? Math.round((t.spent / t.budget) * 100) : 0;
       return `
@@ -1433,7 +1662,7 @@ function renderHolidays(data, filter = tripFilter) {
           ${bookings ? `<div class="booking-links">${bookings}</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             <button class="btn btn-sm btn-primary wf-action" data-action="view-trip" data-trip-id="${t.id}">Details</button>
-            <button class="btn btn-sm btn-soft wf-action" data-action="add-packing" data-trip-id="${t.id}" data-template="beach">Packing</button>
+            <button class="btn btn-sm btn-soft wf-action" data-action="add-packing" data-trip-id="${t.id}">Packing</button>
             <button class="btn btn-sm btn-soft wf-action" data-tab-link="media" data-media-trip="${t.id}">Photos</button>
             <button class="btn btn-sm btn-outline wf-action" data-action="edit-trip" data-trip-id="${t.id}">Edit</button>
           </div>
@@ -1457,7 +1686,7 @@ function renderHolidays(data, filter = tripFilter) {
       </div>
     </article>`
     )
-    .join('');
+    .join('') || '<p class="hint-small">No ideas yet — describe a trip in the AI box above to generate some.</p>';
 }
 
 function docStatusLabel(status) {
@@ -1581,6 +1810,7 @@ function renderMedia(data, filter = mediaFilter) {
           </div>
           <div class="media-card-actions">
             ${fileUrl ? `<a class="btn btn-sm btn-soft" href="${fileUrl}" target="_blank" rel="noopener">View</a>` : ''}
+            <button class="btn btn-sm btn-soft wf-action" data-action="edit-media" data-media-id="${m.id}">Edit</button>
             <button class="btn btn-sm btn-ghost wf-action" data-action="delete-media" data-media-id="${m.id}">Delete</button>
           </div>
         </div>
@@ -1588,6 +1818,49 @@ function renderMedia(data, filter = mediaFilter) {
         })
         .join('')
     : `<div class="vault-empty"><p>No photos or videos yet.</p><p class="hint-small">Upload family memories and link them to your holidays.</p></div>`;
+}
+
+function openEditMediaModal(mediaId) {
+  const m = (store.media?.items || []).find((x) => String(x.id) === String(mediaId));
+  if (!m) return showToast('Media not found', true);
+  const trips = store.media?.trips || store.holidays?.trips || [];
+  const tripOpts = '<option value="">No trip</option>' + trips
+    .map((t) => `<option value="${esc(t.id)}"${t.id === m.trip_id ? ' selected' : ''}>${esc(t.title)}</option>`)
+    .join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Edit photo / video</h3><p>Rename, caption, or link to a trip.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Title</span><input type="text" id="md-title" value="${esc(m.title)}"></label>
+        <label class="field field-full"><span>Caption</span><input type="text" id="md-caption" value="${esc(m.caption || '')}"></label>
+        <label class="field field-full"><span>Trip</span><select id="md-trip">${tripOpts}</select></label>
+        <label class="field field-full"><span>Date taken</span><input type="date" id="md-taken" value="${esc((m.taken_at || '').slice(0, 10))}"></label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="md-save">Save</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('md-save').onclick = async () => {
+    try {
+      await api(`/media/${mediaId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: document.getElementById('md-title').value.trim(),
+          caption: document.getElementById('md-caption').value.trim(),
+          trip_id: document.getElementById('md-trip').value,
+          taken_at: document.getElementById('md-taken').value,
+        }),
+      });
+      closeModal();
+      showToast('Media updated');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
 }
 
 function subscriptionStatusLabel(status) {
@@ -1598,6 +1871,19 @@ function subscriptionStatusLabel(status) {
 
 function frequencyLabel(freq) {
   return { monthly: 'Monthly', weekly: 'Weekly', yearly: 'Yearly', quarterly: 'Quarterly' }[freq] || freq;
+}
+
+// Is this subscription already tracked by (matched/locked to) a bill?
+function subscriptionHasBill(subId) {
+  return (store.finances?.bills || []).some((b) => String(b.subscription_id || '') === String(subId));
+}
+
+// Day-of-month for a new bill, from the sub's expected/last charge date, clamped 1–28.
+function billDueDayFromDates(nextDate, lastDate) {
+  const src = nextDate || lastDate;
+  const day = src ? new Date(src).getDate() : NaN;
+  if (!day || isNaN(day)) return 1;
+  return Math.min(Math.max(day, 1), 28);
 }
 
 function renderSubscriptions(data) {
@@ -1617,7 +1903,7 @@ function renderSubscriptions(data) {
           <div class="subscription-name">${esc(s.display_name)}</div>
           <div class="subscription-meta">
             <span class="status-tag ${s.status === 'confirmed' ? 'booked' : s.status === 'detected' ? 'planning' : 'idea'}">${subscriptionStatusLabel(s.status)}</span>
-            <span>${frequencyLabel(s.frequency)}</span>
+            <span>${esc(frequencyLabel(s.frequency))}</span>
             <span>${s.occurrence_count} charges found</span>
             ${s.account ? `<span>${esc(s.account)}</span>` : ''}
           </div>
@@ -1626,6 +1912,7 @@ function renderSubscriptions(data) {
         <div class="subscription-amount">${fmt.gbp(s.amount)}</div>
         <div class="subscription-actions">
           ${s.status !== 'confirmed' ? `<button class="btn btn-sm btn-primary wf-action" data-action="confirm-subscription" data-sub-id="${s.id}">Confirm</button>` : ''}
+          ${!subscriptionHasBill(s.id) ? `<button class="btn btn-sm btn-soft wf-action" data-action="track-as-bill" data-sub-id="${esc(s.id)}">Track as bill</button>` : ''}
           <button class="btn btn-sm btn-ghost wf-action" data-action="ignore-subscription" data-sub-id="${s.id}">Hide</button>
         </div>
       </div>`
@@ -1685,11 +1972,12 @@ function renderRenewals(data) {
     : '<div class="vault-empty"><p>No renewals in the next 90 days.</p></div>';
 }
 
-function renderMaintenance(data) {
-  const items = data?.items || [];
-  document.getElementById('maintenance-list').innerHTML = items.length
-    ? items.map((m) => `
-      <div class="maintenance-row">
+function findMaintenance(id) {
+  return (store.maintenance?.items || []).find((m) => String(m.id) === String(id));
+}
+
+function maintRowInner(m) {
+  return `
         <div>
           <strong>${esc(m.title)}</strong>
           <div class="subscription-meta"><span>${esc(m.category)}</span>${m.vendor ? `<span>${esc(m.vendor)}</span>` : ''}${m.next_due_date ? `<span>Due ${fmt.date(m.next_due_date)}</span>` : ''}</div>
@@ -1697,8 +1985,37 @@ function renderMaintenance(data) {
         </div>
         <div class="subscription-actions">
           <button class="btn btn-sm btn-primary wf-action" data-action="maintenance-done" data-maint-id="${m.id}">Mark done</button>
-        </div>
-      </div>`).join('')
+          <button class="bill-edit-btn wf-action" data-action="edit-maintenance" data-maint-id="${m.id}" title="Edit item" aria-label="Edit maintenance item">✎</button>
+        </div>`;
+}
+
+// Inline edit form for a maintenance row — mirrors the bill-row pattern.
+function maintEditInner(m) {
+  const catOpts = ['heating', 'exterior', 'appliance', 'general']
+    .map((c) => `<option value="${c}"${c === m.category ? ' selected' : ''}>${c}</option>`)
+    .join('');
+  return `
+    <div class="row-edit" data-maint-id="${m.id}">
+      <input type="text" class="te-input" data-f="title" value="${esc(m.title)}" placeholder="Title">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${catOpts}</select></label>
+        <label>Next due<input type="date" data-f="next_due_date" value="${esc((m.next_due_date || '').slice(0, 10))}"></label>
+        <label>Interval (months)<input type="number" min="0" data-f="interval_months" value="${m.interval_months ?? 12}"></label>
+        <label>Vendor<input type="text" data-f="vendor" value="${esc(m.vendor || '')}"></label>
+        <label>Notes<input type="text" data-f="notes" value="${esc(m.notes || '')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-maintenance-inline" data-maint-id="${m.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-maintenance-inline" data-maint-id="${m.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-maintenance-inline" data-maint-id="${m.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function renderMaintenance(data) {
+  const items = data?.items || [];
+  document.getElementById('maintenance-list').innerHTML = items.length
+    ? items.map((m) => `<div class="maintenance-row" data-maint-id="${m.id}">${maintRowInner(m)}</div>`).join('')
     : '<div class="vault-empty"><p>No maintenance items yet.</p></div>';
 }
 
@@ -1711,11 +2028,41 @@ function renderMergedRecurring(data) {
       <div class="subscription-row">
         <div class="subscription-main">
           <div class="subscription-name">${esc(x.name)} ${x.matched ? '<span class="media-trip-pill">Matched</span>' : ''}</div>
-          <div class="subscription-meta"><span>${x.source}</span><span>${x.frequency || 'monthly'}</span>${x.amount_note ? `<span>${esc(x.amount_note)}</span>` : ''}</div>
+          <div class="subscription-meta"><span>${esc(x.source)}</span><span>${esc(x.frequency || 'monthly')}</span>${x.amount_note ? `<span>${esc(x.amount_note)}</span>` : ''}</div>
         </div>
         <div class="subscription-amount">${fmt.gbp(x.amount)}</div>
+        ${x.source === 'subscription' && !x.matched && !x.bill_id
+          ? `<div class="subscription-actions"><button class="btn btn-sm btn-soft wf-action" data-action="track-as-bill" data-sub-id="${esc(x.subscription_id)}">Track as bill</button></div>`
+          : ''}
       </div>`).join('')
     : '<p class="hint-small">No recurring items yet.</p>';
+}
+
+// Choose one of the backend packing templates (server/services/trips.py PACKING_TEMPLATES).
+function openPackingTemplateModal(tripId) {
+  const templates = [
+    { id: 'default', label: 'Essentials', desc: 'Passports, chargers, toiletries, meds' },
+    { id: 'beach', label: 'Beach', desc: 'Swimwear, sun cream, towels, flip flops' },
+    { id: 'city', label: 'City break', desc: 'Walking shoes, day bag, maps, charger' },
+    { id: 'weekend', label: 'Weekend', desc: 'Overnight bag, change of clothes, snacks' },
+  ];
+  const tiles = templates
+    .map(
+      (t) => `
+      <button type="button" class="bank-provider-tile wf-action" data-action="add-packing" data-trip-id="${tripId}" data-template="${t.id}">
+        <strong>${t.label}</strong>
+        <span>${t.desc}</span>
+      </button>`
+    )
+    .join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Add packing list</h3><p>Pick a starter template — items appear on the trip card.</p></div>
+      <div class="wf-modal-body"><div class="bank-provider-grid">${tiles}</div></div>
+      <div class="wf-modal-footer"><button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button></div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
 }
 
 async function openTripDetailModal(tripId) {
@@ -1726,9 +2073,15 @@ async function openTripDetailModal(tripId) {
         <strong>${esc(day.label)}</strong>
         ${day.media?.length ? day.media.map((m) => `<span class="media-trip-pill">${esc(m.title)}</span>`).join(' ') : '<span class="hint-small">No media</span>'}
       </div>`).join('');
-    const packing = (trip.packing || []).map((p) => `<li class="${p.done ? 'done' : ''}">${esc(p.label)}</li>`).join('');
-    const docs = (trip.linked_documents || []).map((d) => `<li>${esc(d.name)} (${esc(d.category)})</li>`).join('');
+    const packing = (trip.packing || [])
+      .map((p) => `<li class="wf-action${p.done ? ' done' : ''}" data-action="toggle-checklist" data-trip-id="${tripId}" data-item-type="packing" data-item-id="${esc(p.id ?? p.label)}" style="cursor:pointer" title="Tap to toggle"><span class="checklist-box">${p.done ? '✓' : ''}</span>${esc(p.label)}</li>`)
+      .join('');
+    const docs = (trip.linked_documents || [])
+      .map((d) => `<li style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span>${esc(d.name)} (${esc(d.category)})</span><button type="button" class="btn btn-sm btn-ghost wf-action" data-action="unlink-trip-doc" data-trip-id="${tripId}" data-doc-id="${d.id}">Unlink</button></li>`)
+      .join('');
+    const linkedIds = new Set((trip.linked_documents || []).map((d) => String(d.id)));
     const docOptions = (store.documents?.documents || [])
+      .filter((d) => !linkedIds.has(String(d.id)))
       .map((d) => `<option value="${d.id}">${esc(d.name)}</option>`)
       .join('');
     document.getElementById('modal-root').innerHTML = `
@@ -1737,7 +2090,7 @@ async function openTripDetailModal(tripId) {
         <div class="wf-modal-header"><h3>${esc(trip.title)}</h3><p>Trip timeline, packing &amp; travel documents</p></div>
         <div class="wf-modal-body">
           <h4>Timeline</h4>${timeline || '<p class="hint-small">Add dates and photos to build a timeline.</p>'}
-          <h4 style="margin-top:16px">Packing</h4><ul class="checklist">${packing || '<li>Add packing list from trip card</li>'}</ul>
+          <h4 style="margin-top:16px">Packing</h4><ul class="checklist">${packing || '<li>Add a packing list from the trip card</li>'}</ul>
           <h4 style="margin-top:16px">Travel documents</h4><ul>${docs || '<li>No documents linked yet</li>'}</ul>
           ${docOptions ? `
           <div class="trip-doc-link" style="margin-top:12px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
@@ -1848,11 +2201,13 @@ function renderSettings(data) {
           <div class="connection-info">
             <div class="connection-icon">🏦</div>
             <div>
-              <div class="connection-name">${c.provider_name}</div>
-              <div class="connection-status connected">${c.last_synced_at ? 'Last sync ' + fmt.datetime(c.last_synced_at) : 'Connected'}</div>
+              <div class="connection-name">${esc(c.provider_name)}</div>
+              <div class="connection-status ${c.status === 'needs_reauth' ? '' : 'connected'}">${c.status === 'needs_reauth'
+                ? '⚠️ Needs re-connect'
+                : (c.last_synced_at ? 'Last sync ' + fmt.datetime(c.last_synced_at) : 'Connected')}</div>
             </div>
           </div>
-          <button class="btn btn-sm btn-secondary wf-action" data-action="connect-bank-provider" data-provider-id="${c.provider_id}">Reconnect</button>
+          <button class="btn btn-sm btn-secondary wf-action" data-action="connect-bank-provider" data-provider-id="${esc(c.provider_id)}">Reconnect</button>
         </div>`
             )
             .join('')
@@ -1914,8 +2269,8 @@ function renderSettings(data) {
           (u) => `
         <div class="connection-row">
           <div class="connection-info">
-            <span class="member-dot" style="background:${u.colour};width:12px;height:12px"></span>
-            <div class="connection-name">${u.name}</div>
+            <span class="member-dot" style="background:${safeColour(u.colour)};width:12px;height:12px"></span>
+            <div class="connection-name">${esc(u.name)}</div>
           </div>
           <button class="btn btn-sm btn-ghost wf-action" data-action="edit-member" data-user-id="${u.id}">Edit</button>
         </div>`
@@ -1929,9 +2284,10 @@ function renderSettings(data) {
     </div>
     <div class="settings-section">
       <h3>Login &amp; access</h3>
-      <p>Change your password or preview the login screen.</p>
+      <p>Change your password, sign out, or preview the login screen.</p>
       <button class="btn btn-primary wf-action" data-action="change-password">Change password</button>
       <button class="btn btn-outline wf-action" data-action="preview-login" style="margin-left:8px">Preview login screen</button>
+      <button class="btn btn-ghost wf-action" data-action="sign-out" style="margin-left:8px">Sign out</button>
     </div>
     <div class="settings-section">
       <h3>Recent notifications</h3>
@@ -2003,16 +2359,29 @@ function openSearchModal() {
 function openLoginPreview() {
   closeModal();
   closeNotif();
-  document.getElementById('login-overlay').hidden = false;
+  showLogin(); // shows the "Back to preview" button because currentUser is set
 }
 
 function closeLoginPreview() {
   document.getElementById('login-overlay').hidden = true;
 }
 
+const NOTIF_SEEN_KEY = 'hub-notif-seen';
+
+function reminderFingerprint(list) {
+  return (list || []).map((r) => `${r.type}|${r.text}|${r.when}`).sort().join('||');
+}
+
 function renderNotifications(reminders, unread) {
   const badge = document.getElementById('notif-badge');
-  if (unread > 0) {
+  let seen = null;
+  try {
+    seen = localStorage.getItem(NOTIF_SEEN_KEY);
+  } catch {
+    /* private browsing etc. — badge just behaves as before */
+  }
+  // Hide the count once the user has opened the panel for this exact set of reminders.
+  if (unread > 0 && reminderFingerprint(reminders) !== seen) {
     badge.hidden = false;
     badge.textContent = unread;
   } else {
@@ -2074,6 +2443,7 @@ function initActions() {
 
     const action = btn.dataset.action;
     const modal = btn.dataset.modal;
+    if (!action) return; // e.g. #login-close carries wf-action styling but no action
 
     if (action === 'search') {
       openSearchModal();
@@ -2179,6 +2549,23 @@ function initActions() {
     }
     if (action === 'event-detail') {
       if (btn.dataset.eventId) openEventDetailModal(btn.dataset.eventId);
+      return;
+    }
+    if (action === 'edit-event') {
+      if (btn.dataset.eventId) openEditEventModal(btn.dataset.eventId);
+      return;
+    }
+    if (action === 'delete-event') {
+      const evId = btn.dataset.eventId;
+      if (evId && confirm('Delete this event?')) {
+        api(`/events/${evId}`, { method: 'DELETE' })
+          .then(() => {
+            closeModal();
+            showToast('Event deleted');
+            load();
+          })
+          .catch((err) => showToast(err.message, true));
+      }
       return;
     }
     if (action === 'edit-appointment') {
@@ -2320,6 +2707,46 @@ function initActions() {
       }
       return;
     }
+    if (action === 'track-as-bill') {
+      const subId = btn.dataset.subId;
+      let sub = (store.subscriptions?.subscriptions || []).find((s) => String(s.id) === String(subId));
+      if (!sub) {
+        const merged = (store.finances?.merged_recurring?.items || []).find(
+          (x) => String(x.subscription_id || '') === String(subId)
+        );
+        if (merged) {
+          sub = {
+            id: merged.subscription_id,
+            display_name: merged.name,
+            amount: merged.amount,
+            frequency: merged.frequency,
+            category: merged.category,
+            next_expected_date: merged.next_expected_date,
+            last_charge_date: merged.last_charge_date,
+          };
+        }
+      }
+      if (!sub) return showToast('Subscription not found', true);
+      btn.disabled = true;
+      api('/bills', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: sub.display_name,
+          amount: sub.amount,
+          due_day: billDueDayFromDates(sub.next_expected_date, sub.last_charge_date),
+          recurrence: sub.frequency || 'monthly',
+          category: sub.category || 'Subscriptions',
+        }),
+      })
+        .then((bill) => api(`/bills/${bill.id}/lock`, { method: 'POST', body: JSON.stringify({ subscription_id: sub.id }) }))
+        .then(() => load())
+        .then(() => showToast(`${sub.display_name} is now tracked as a bill`))
+        .catch((err) => {
+          btn.disabled = false;
+          showToast(err.message, true);
+        });
+      return;
+    }
     if (action === 'holiday-idea' && btn.id === 'ai-generate-btn') {
       submitHolidayAI(document.getElementById('ai-prompt-input')?.value);
       return;
@@ -2367,7 +2794,7 @@ function initActions() {
       api(`/tasks/${btn.dataset.taskId}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          title: f.title.trim(), assignee_id: f.assignee, priority: f.priority,
+          title: f.title.trim(), assignee_id: f.assignee || null, priority: f.priority,
           due: f.due || null, remind_at: f.remind_at || null, notify: !!f.notify,
         }),
       }).then(() => load()).then(() => { if (inModal) openAllTasksModal(); showToast('Task updated'); })
@@ -2442,6 +2869,105 @@ function initActions() {
         .catch((err) => showToast(err.message, true));
       return;
     }
+    if (action === 'add-budget') {
+      const budgeted = new Set((store.finances?.budgets || []).map((b) => b.category));
+      const cats = (store.finances?.categories || BILL_CATEGORIES).filter((c) => !budgeted.has(c) && c !== 'Income');
+      btn.outerHTML = budgetAddInner(cats);
+      document.querySelector('#budget-add-form [data-f="monthly_limit"]')?.focus();
+      return;
+    }
+    if (action === 'save-budget-new') {
+      const f = readInlineFields(document.getElementById('budget-add-form'));
+      const limit = parseFloat(f.monthly_limit);
+      if (!f.category) { showToast('Pick a category', true); return; }
+      if (!(limit > 0)) { showToast('Enter a limit above £0', true); return; }
+      api('/budgets', { method: 'POST', body: JSON.stringify({ category: f.category, monthly_limit: limit }) })
+        .then(() => load()).then(() => showToast('Budget added'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'edit-budget') {
+      const row = btn.closest('.budget-item');
+      const b = findBudget(btn.dataset.budgetCat);
+      if (row && b) { row.classList.add('editing'); row.innerHTML = budgetEditInner(b); row.querySelector('[data-f="monthly_limit"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-budget-inline') {
+      const row = btn.closest('.budget-item');
+      const f = readInlineFields(row);
+      const limit = parseFloat(f.monthly_limit);
+      if (!(limit > 0)) { showToast('Enter a limit above £0', true); return; }
+      api(`/budgets/${encodeURIComponent(btn.dataset.budgetCat)}`, { method: 'PATCH', body: JSON.stringify({ monthly_limit: limit }) })
+        .then(() => load()).then(() => showToast('Budget updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-budget-inline') {
+      const row = btn.closest('.budget-item');
+      const b = findBudget(btn.dataset.budgetCat);
+      if (row && b) { row.className = 'budget-item'; row.innerHTML = budgetRowInner(b); }
+      return;
+    }
+    if (action === 'delete-budget') {
+      if (!confirm(`Remove the ${btn.dataset.budgetCat} budget?`)) return;
+      api(`/budgets/${encodeURIComponent(btn.dataset.budgetCat)}`, { method: 'DELETE' })
+        .then(() => load()).then(() => showToast('Budget removed'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'add-savings') {
+      btn.outerHTML = savingsAddInner();
+      document.querySelector('#savings-add-form [data-f="name"]')?.focus();
+      return;
+    }
+    if (action === 'save-savings-new') {
+      const f = readInlineFields(document.getElementById('savings-add-form'));
+      const target = parseFloat(f.target);
+      if (!f.name || !f.name.trim()) { showToast('Goal needs a name', true); return; }
+      if (!(target > 0)) { showToast('Enter a target above £0', true); return; }
+      api('/savings-goals', {
+        method: 'POST',
+        body: JSON.stringify({ name: f.name.trim(), target, current: parseFloat(f.current) || 0, colour: f.colour }),
+      }).then(() => load()).then(() => showToast('Savings goal added'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'edit-savings') {
+      const row = btn.closest('.savings-card');
+      const g = findSavings(btn.dataset.goalId);
+      if (row && g) { row.classList.add('editing'); row.innerHTML = savingsEditInner(g); row.querySelector('[data-f="name"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-savings-inline') {
+      const row = btn.closest('.savings-card');
+      const f = readInlineFields(row);
+      const target = parseFloat(f.target);
+      if (!f.name || !f.name.trim()) { showToast('Goal needs a name', true); return; }
+      if (!(target > 0)) { showToast('Enter a target above £0', true); return; }
+      api(`/savings-goals/${btn.dataset.goalId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: f.name.trim(), target, current: parseFloat(f.current) || 0, colour: f.colour }),
+      }).then(() => load()).then(() => showToast('Savings goal updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-savings-inline') {
+      const row = btn.closest('.savings-card');
+      const g = findSavings(btn.dataset.goalId);
+      if (row && g) { row.className = 'savings-card'; row.innerHTML = savingsRowInner(g); }
+      return;
+    }
+    if (action === 'delete-savings' || action === 'delete-savings-inline') {
+      if (!confirm('Delete this savings goal?')) return;
+      api(`/savings-goals/${btn.dataset.goalId}`, { method: 'DELETE' })
+        .then(() => load()).then(() => showToast('Savings goal deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-add-row') {
+      load();
+      return;
+    }
     if (action === 'view-trip') {
       const tripId = btn.dataset.tripId;
       if (tripId) openTripDetailModal(tripId);
@@ -2449,15 +2975,39 @@ function initActions() {
     }
     if (action === 'add-packing') {
       const tripId = btn.dataset.tripId;
-      const template = btn.dataset.template || 'beach';
-      if (tripId) {
-        api(`/holidays/trips/${tripId}/packing`, { method: 'POST', body: JSON.stringify({ template }) })
-          .then(() => {
-            showToast('Packing list added');
-            load();
-          })
-          .catch((err) => showToast(err.message, true));
+      const template = btn.dataset.template;
+      if (!tripId) return;
+      if (!template) {
+        openPackingTemplateModal(tripId);
+        return;
       }
+      api(`/holidays/trips/${tripId}/packing`, { method: 'POST', body: JSON.stringify({ template }) })
+        .then(() => {
+          closeModal();
+          showToast('Packing list added');
+          load();
+        })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'toggle-checklist') {
+      const tripId = btn.dataset.tripId;
+      const itemId = btn.dataset.itemId;
+      if (!tripId || !itemId) return;
+      const box = btn.querySelector('.checklist-box');
+      const flip = () => {
+        btn.classList.toggle('done');
+        if (box) box.textContent = btn.classList.contains('done') ? '✓' : '';
+      };
+      flip(); // optimistic — counters refresh on reload
+      const body = { item_id: itemId };
+      if (btn.dataset.itemType) body.item_type = btn.dataset.itemType; // packing rows are matched by label + type
+      api(`/holidays/trips/${tripId}/checklist/toggle`, { method: 'POST', body: JSON.stringify(body) })
+        .then(() => load())
+        .catch((err) => {
+          flip();
+          showToast(err.message, true);
+        });
       return;
     }
     if (action === 'link-trip-doc') {
@@ -2467,6 +3017,19 @@ function initActions() {
         api(`/holidays/trips/${tripId}/documents/${docId}`, { method: 'POST' })
           .then(() => {
             showToast('Document linked');
+            openTripDetailModal(tripId);
+          })
+          .catch((err) => showToast(err.message, true));
+      }
+      return;
+    }
+    if (action === 'unlink-trip-doc') {
+      const tripId = btn.dataset.tripId;
+      const docId = btn.dataset.docId;
+      if (tripId && docId) {
+        api(`/holidays/trips/${tripId}/documents/${docId}`, { method: 'DELETE' })
+          .then(() => {
+            showToast('Document unlinked');
             openTripDetailModal(tripId);
           })
           .catch((err) => showToast(err.message, true));
@@ -2485,6 +3048,50 @@ function initActions() {
       }
       return;
     }
+    if (action === 'edit-maintenance') {
+      const row = btn.closest('.maintenance-row');
+      const m = findMaintenance(btn.dataset.maintId);
+      if (row && m) {
+        row.classList.add('editing');
+        row.innerHTML = maintEditInner(m);
+        row.querySelector('[data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-maintenance-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Item needs a title', true); return; }
+      api(`/maintenance/${btn.dataset.maintId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: f.title.trim(),
+          category: f.category,
+          next_due_date: f.next_due_date || '',
+          interval_months: parseInt(f.interval_months, 10) || 0,
+          vendor: f.vendor || '',
+          notes: f.notes || '',
+        }),
+      }).then(() => load()).then(() => showToast('Maintenance item updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-maintenance-inline') {
+      const row = btn.closest('.maintenance-row');
+      const m = findMaintenance(btn.dataset.maintId);
+      if (row && m) {
+        row.classList.remove('editing');
+        row.innerHTML = maintRowInner(m);
+      }
+      return;
+    }
+    if (action === 'delete-maintenance-inline') {
+      if (!confirm('Delete this maintenance item?')) return;
+      api(`/maintenance/${btn.dataset.maintId}`, { method: 'DELETE' })
+        .then(() => load()).then(() => showToast('Maintenance item deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
     if (action === 'scan-receipt') {
       document.getElementById('receipt-file-input')?.click();
       return;
@@ -2496,10 +3103,24 @@ function initActions() {
     if (action === 'send-reminders') {
       api('/notifications/send-reminders', { method: 'POST' })
         .then((r) => {
-          if (r.sent) showToast(`Sent reminder for ${r.count} item(s)`);
+          if (r.error) showToast(r.error, true);
+          else if (r.sent) showToast(`Sent reminder for ${r.count} item(s)`);
           else showToast(r.reason || 'No reminders sent');
         })
         .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'sign-out') {
+      api('/auth/logout', { method: 'POST' })
+        .catch(() => {}) // clear locally even if the server call fails
+        .then(() => {
+          currentUser = null;
+          store = {};
+          closeModal();
+          closeNotif();
+          showToast('Signed out');
+          showLogin();
+        });
       return;
     }
     if (action === 'whatsapp-test') {
@@ -2531,7 +3152,7 @@ function initActions() {
       }
       return;
     }
-    showToast(ACTION_MSG[action] || `Coming in Phase 1: ${action.replace(/-/g, ' ')}`);
+    showToast(`“${action.replace(/-/g, ' ')}” isn’t available yet`);
   });
 
   document.querySelectorAll('input[name="appt-filter"]').forEach((radio) => {
@@ -2543,6 +3164,15 @@ function initActions() {
 
   // Recategorise a transaction (and learn the merchant) when its dropdown changes
   document.addEventListener('change', (e) => {
+    // Calendar member-filter chips
+    const filterCb = e.target.closest('#cal-filters input[type="checkbox"][data-user-id]');
+    if (filterCb) {
+      if (filterCb.checked) calFilterHidden.delete(filterCb.dataset.userId);
+      else calFilterHidden.add(filterCb.dataset.userId);
+      if (store.calendar) renderCalendar(store.calendar);
+      return;
+    }
+
     const sel = e.target.closest('.txn-cat');
     if (!sel || !sel.dataset.txnId) return;
     api(`/transactions/${sel.dataset.txnId}`, {
@@ -2559,6 +3189,13 @@ function initActions() {
   document.getElementById('notif-btn').onclick = () => {
     document.getElementById('notif-panel').hidden = false;
     document.getElementById('notif-backdrop').hidden = false;
+    // Remember what was seen so the badge stays hidden until the reminders change.
+    try {
+      localStorage.setItem(NOTIF_SEEN_KEY, reminderFingerprint(store.dashboard?.reminders || []));
+    } catch {
+      /* storage unavailable — badge keeps its old behaviour */
+    }
+    document.getElementById('notif-badge').hidden = true;
   };
   document.getElementById('notif-close').onclick = closeNotif;
   document.getElementById('notif-backdrop').onclick = closeNotif;
@@ -3024,6 +3661,35 @@ async function refreshAssistantStatus() {
   }
 }
 
+// Which page containers belong to each endpoint — used to show a per-section
+// failure hint instead of blanking the whole app when one endpoint errors.
+const SECTION_CONTAINERS = {
+  dashboard: ['welcome-hero', 'reminder-strip', 'home-stats', 'home-events', 'home-tasks', 'home-bills', 'home-appointments', 'home-holiday', 'home-documents', 'home-finance'],
+  calendar: ['calendar-grid', 'calendar-agenda'],
+  finances: ['finance-stats', 'accounts-row', 'finance-bills', 'finance-budgets', 'finance-savings', 'finance-transactions', 'merged-recurring'],
+  appointments: ['appointments-body'],
+  holidays: ['holiday-trips', 'holiday-ideas'],
+  documents: ['vault-stats', 'vault-grid'],
+  media: ['media-stats', 'media-grid'],
+  subscriptions: ['subscription-stats', 'subscription-list'],
+  settings: ['settings-content'],
+  briefing: ['briefing-card'],
+  activity: ['activity-feed'],
+  renewals: ['renewal-stats', 'renewal-timeline'],
+  maintenance: ['maintenance-list'],
+};
+
+function markSectionFailed(key) {
+  (SECTION_CONTAINERS[key] || []).forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const msg = 'Couldn’t load this section — try refreshing.';
+    el.innerHTML = el.tagName === 'TBODY'
+      ? `<tr><td colspan="8" class="hint-small">${msg}</td></tr>`
+      : `<p class="hint-small">${msg}</p>`;
+  });
+}
+
 async function load() {
   try {
     const me = await api('/auth/me');
@@ -3036,42 +3702,42 @@ async function load() {
 
   loadWeather();  // refresh header forecast (also picks up holiday-location changes)
 
-  const [dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance] = await Promise.all([
-    api('/dashboard'),
-    api('/calendar'),
-    api('/finances'),
-    api('/appointments'),
-    api('/holidays'),
-    api('/documents'),
-    api('/media'),
-    api('/subscriptions'),
-    api('/settings'),
-    api('/briefing'),
-    api('/activity'),
-    api('/renewals'),
-    api('/maintenance'),
-  ]);
+  const keys = ['dashboard', 'calendar', 'finances', 'appointments', 'holidays', 'documents', 'media', 'subscriptions', 'settings', 'briefing', 'activity', 'renewals', 'maintenance'];
+  const results = await Promise.allSettled(keys.map((k) => api(`/${k}`)));
 
-  store = { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance };
+  store = {};
+  const failed = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') store[keys[i]] = r.value;
+    else failed.push(keys[i]);
+  });
 
-  renderMembers(dashboard.users);
-  renderWelcome(dashboard);
-  renderBriefing(briefing);
+  const { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance } = store;
+
   renderActionGrid();
-  renderReminders(dashboard.reminders);
-  renderHome(dashboard);
-  renderActivityFeed(activity);
-  renderCalendar(calendar);
-  renderFinances(finances);
-  renderRenewals(renewals);
-  renderMaintenance(maintenance);
-  renderAppointments(appointments);
-  renderHolidays(holidays);
-  renderMedia(media);
-  renderSubscriptions(subscriptions);
-  renderDocuments(documents);
-  renderSettings(settings);
-  renderNotifications(dashboard.reminders || [], dashboard.notifications_unread);
+  if (dashboard) {
+    renderMembers(dashboard.users || []);
+    renderWelcome(dashboard);
+    renderReminders(dashboard.reminders || []);
+    renderHome(dashboard);
+    renderNotifications(dashboard.reminders || [], dashboard.notifications_unread);
+  }
+  if (briefing) renderBriefing(briefing);
+  if (activity) renderActivityFeed(activity);
+  if (calendar) renderCalendar(calendar);
+  if (finances) renderFinances(finances);
+  if (renewals) renderRenewals(renewals);
+  if (maintenance) renderMaintenance(maintenance);
+  if (appointments) renderAppointments(appointments);
+  if (holidays) renderHolidays(holidays);
+  if (media) renderMedia(media);
+  if (subscriptions) renderSubscriptions(subscriptions);
+  if (documents) renderDocuments(documents);
+  if (settings) renderSettings(settings);
+
+  failed.forEach(markSectionFailed);
+  if (failed.length) console.error('Failed to load:', failed.join(', '));
+
   await refreshAssistantStatus();
 }
 
@@ -3082,7 +3748,12 @@ async function boot() {
     window.history.replaceState({}, '', '/');
   }
   if (params.get('google_error')) {
-    showToast('Google connection failed — check .env credentials', true);
+    const raw = params.get('google_error');
+    // Backend passes either "1" (generic) or a URL-encoded reason — show the specific one.
+    const msg = raw === '1'
+      ? 'Google connection failed — check .env credentials'
+      : decodeURIComponent(raw.replace(/\+/g, ' '));
+    showToast(msg, true);
     window.history.replaceState({}, '', '/');
   }
   if (params.get('bank_connected')) {

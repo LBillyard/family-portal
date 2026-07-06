@@ -33,6 +33,32 @@ def normalize_merchant(description: str) -> str:
     return s[:80] or description[:40].upper()
 
 
+def _is_raw_ref(name: str) -> bool:
+    """True when a name looks like a raw bank reference (mostly digits / no real
+    word) rather than a human merchant name — e.g. '0195254311/',
+    'CARE-031459489400', '5180795200100002'. 'Google One', 'Netflix' are not."""
+    if not name:
+        return True
+    letters = sum(c.isalpha() for c in name)
+    if letters < 3:
+        return True
+    compact = re.sub(r"\s", "", name)
+    digits = sum(c.isdigit() for c in name)
+    return bool(compact) and digits / len(compact) > 0.4
+
+
+def prettify_name(raw: str, merchant_key: str) -> str:
+    """Turn a raw bank ref into a friendlier label when we can. Falls back to the
+    raw string when there's no real signal (e.g. an all-digit reference)."""
+    raw = (raw or "").strip()
+    if not _is_raw_ref(raw):
+        return raw  # already human-readable — leave user-facing text untouched
+    key = (merchant_key or "").strip()
+    if sum(c.isalpha() for c in key) >= 3 and not _is_raw_ref(key):
+        return key.title()
+    return raw
+
+
 def _frequency_from_gap(avg_gap: float) -> str | None:
     if 25 <= avg_gap <= 38:
         return "monthly"
@@ -88,7 +114,7 @@ def detect_subscriptions(transactions: list[dict] | None = None) -> list[dict]:
         results.append(
             {
                 "merchant_key": key,
-                "display_name": display,
+                "display_name": prettify_name(display, key),
                 "amount": round(med, 2),
                 "frequency": frequency,
                 "occurrence_count": len(group),
@@ -113,7 +139,7 @@ def monthly_equivalent(amount: float, frequency: str) -> float:
 
 
 def build_summary(subscriptions: list[dict]) -> dict:
-    active = [s for s in subscriptions if s.get("status") != "ignored"]
+    active = [s for s in subscriptions if s.get("status") not in ("ignored", "lapsed")]
     monthly = sum(monthly_equivalent(s["amount"], s["frequency"]) for s in active)
     return {
         "active_count": len(active),
@@ -125,5 +151,15 @@ def build_summary(subscriptions: list[dict]) -> dict:
 def refresh_subscriptions() -> dict:
     detected = detect_subscriptions()
     items = db.sync_subscriptions(detected)
-    visible = [s for s in items if s["status"] != "ignored"]
+    # One-off prettify for pre-existing rows whose display_name is still a raw bank
+    # ref (they were detected before prettify_name existed). Only raw-ref names are
+    # touched, so a user's hand-edited name is never overwritten. Idempotent: once
+    # a name is human-readable it's no longer raw and is skipped next time.
+    for s in items:
+        if _is_raw_ref(s.get("display_name", "")):
+            better = prettify_name(s["display_name"], s.get("merchant_key", ""))
+            if better != s["display_name"]:
+                db.update_subscription(s["id"], {"display_name": better})
+                s["display_name"] = better
+    visible = [s for s in items if s["status"] not in ("ignored", "lapsed")]
     return {"subscriptions": visible, "summary": build_summary(items), "ignored_count": len(items) - len(visible)}

@@ -1,6 +1,6 @@
 """WhatsApp provider dispatcher.
 
-Selects the active provider from WHATSAPP_PROVIDER (default 'meta'):
+Selects the active provider from WHATSAPP_PROVIDER (default 'twilio'):
   - 'twilio' -> server.services.whatsapp_twilio
   - 'meta'   -> server.services.whatsapp_meta (Cloud API)
 

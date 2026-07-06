@@ -23,7 +23,7 @@ the code — this file is kept roughly current but the source is the truth.
 ## P2 — Features (open)
 
 - [ ] **Push notifications** — appointment/bill reminders (web push)
-- [ ] **Vault search** — full-text on document names/notes
+- [ ] **Vault tab search box** — global search already indexes document name/notes/category; remaining work is a dedicated filter box on the Vault tab itself
 - [ ] **Holiday booking workflow** — flights/hotels checklist automation
 - [ ] Gmail receipts: support PDF attachments (needs a PDF→image step) — currently images only
 - [ ] Bank disconnect ownership — optional per-user check
@@ -37,7 +37,7 @@ the code — this file is kept roughly current but the source is the truth.
 
 ## Ops notes
 
-- Deploy = `scp` changed files to `/opt/family-portal` (the box is NOT a git repo) + `systemctl restart family-portal`. Bump `?v=` in `index.html` on JS/CSS changes.
+- Deploy = `scp` changed files to `/opt/family-portal` (the box is NOT a git repo) + `systemctl restart family-portal`. Bump `?v=` in `index.html` **and** the `CACHE` constant in `sw.js` on every frontend deploy.
 - Timers on the box: `family-portal-digest.timer` (07:00 digest), `family-portal-sync.timer` (hourly Google + bank sync), `family-portal-task-reminders.timer` (every 15 min, task reminder WhatsApp pings).
 - `argon2-cffi` must be `pip install`ed into the box venv (it's in `requirements.txt`); without it, auth safely falls back to PBKDF2.
 - Gmail scope (`gmail.readonly`) was added to `SCOPES` — existing Google connections must be **re-connected** to grant it before email receipt scanning works.

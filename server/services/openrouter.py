@@ -25,13 +25,16 @@ def is_configured() -> bool:
 
 
 def default_model() -> str:
-    configured = os.environ.get("OPENROUTER_DEFAULT_MODEL", "openai/gpt-4o-mini").strip()
-    return configured if configured in ALLOWED_MODELS else "openai/gpt-4o-mini"
+    # Trust the operator's env value — OpenRouter validates model ids server-side.
+    # ALLOWED_MODELS only gates user-facing picker input (resolve_model).
+    return os.environ.get("OPENROUTER_DEFAULT_MODEL", "").strip() or "openai/gpt-4o-mini"
 
 
 def resolve_model(requested: str | None) -> str:
-    if requested and requested in ALLOWED_MODELS:
-        return requested
+    if requested:
+        if requested in ALLOWED_MODELS:
+            return requested
+        logger.warning("Requested model %r not in allowlist — falling back to %s", requested, default_model())
     return default_model()
 
 

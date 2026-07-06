@@ -68,6 +68,7 @@ if ($SkipUpload) {
 if (-not $KeyPath) {
     Write-Host ""
     Write-Host "No -KeyPath provided. Upload app manually:" -ForegroundColor Yellow
+    Write-Host "  ssh -i YOUR_KEY.pem ubuntu@$ip 'mkdir -p /tmp/family-upload'"
     Write-Host "  scp -i YOUR_KEY.pem -r `"$Root\server`" `"$Root\shared`" `"$Root\deploy`" `"$Root\requirements.txt`" ubuntu@${ip}:/tmp/family-upload/"
     Write-Host "  ssh -i YOUR_KEY.pem ubuntu@$ip 'sudo mkdir -p /opt/family-portal && sudo rsync -a /tmp/family-upload/ /opt/family-portal/ && sudo bash /opt/family-portal/deploy/install-ubuntu.sh'"
     exit 0
@@ -86,6 +87,7 @@ if (-not $ready) {
 }
 
 Write-Host "==> Uploading project to /opt/family-portal..." -ForegroundColor Cyan
+ssh -i $KeyPath -o StrictHostKeyChecking=no "ubuntu@$ip" "mkdir -p /tmp/family-upload"
 scp -i $KeyPath -o StrictHostKeyChecking=no -r "$Root\server" "$Root\shared" "$Root\deploy" "$Root\requirements.txt" "ubuntu@${ip}:/tmp/family-upload/"
 
 ssh -i $KeyPath -o StrictHostKeyChecking=no "ubuntu@$ip" @"
@@ -99,5 +101,7 @@ Write-Host ""
 Write-Host "==============================================" -ForegroundColor Green
 Write-Host "  Family Portal is live at $portalUrl"
 Write-Host "  Set PUBLIC_URL and GOOGLE_REDIRECT_URI in .env"
-Write-Host "  Default logins: luke@example.com / family123"
+Write-Host "  Logins: lbillyard@gmail.com / lebillyard@gmail.com"
+Write-Host "  Password: FAMILY_PORTAL_SEED_PASSWORD if set in .env before first start,"
+Write-Host "  otherwise auto-generated and logged at seed time (journalctl -u family-portal)"
 Write-Host "==============================================" -ForegroundColor Green

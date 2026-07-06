@@ -367,6 +367,59 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_bill_paid",
+            "description": "Mark a bill as paid for this cycle by bill_id (preferred) or name_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bill_id": {"type": "string"},
+                    "name_contains": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_bill",
+            "description": "Change an existing bill's name, amount, due day, recurrence or category. Identify by bill_id (preferred) or name_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bill_id": {"type": "string"},
+                    "name_contains": {"type": "string"},
+                    "name": {"type": "string", "description": "New name"},
+                    "amount": {"type": "number"},
+                    "due_day": {"type": "integer", "description": "Day of month 1-31"},
+                    "recurrence": {"type": "string"},
+                    "category": {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_task",
+            "description": "Change an existing task's title, assignee, due date, priority, reminder or completion. Identify by task_id (preferred) or title_contains.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "title_contains": {"type": "string"},
+                    "title": {"type": "string", "description": "New title"},
+                    "assignee": {"type": "string", "enum": ["luke", "laura", "either"]},
+                    "due_date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+                    "completed": {"type": "boolean"},
+                    "remind_at": {"type": "string", "description": "ISO datetime"},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -532,7 +585,10 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 from server.services import google_calendar
 
                 if google_calendar.is_configured():
-                    google_calendar.push_event_to_google(owner, {**event, "all_day": bool(args.get("all_day") or "T" not in start)})
+                    gid = google_calendar.push_event_to_google(owner, {**event, "all_day": bool(args.get("all_day") or "T" not in start)})
+                    if gid:
+                        # Remember what we pushed so the next Google sync doesn't re-import it as a duplicate.
+                        db.set_event_google_written(event["id"], gid)
             except Exception:
                 pass
             activity_log.log(user, "created", "event", f"Added event: {args['title']}", entity_id=event["id"])
@@ -606,13 +662,16 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 amount = abs(amount)
             else:
                 amount = -abs(amount)
+            account_id = db.resolve_account_id()
+            if not account_id:
+                return {"ok": False, "error": "No account to log against yet — connect a bank first."}
             txn = db.create_transaction(
                 {
                     "description": args["description"],
                     "amount": amount,
                     "category": args["category"],
                     "date": args.get("date") or date.today().isoformat(),
-                    "account_id": "starling",
+                    "account_id": account_id,
                 }
             )
             activity_log.log(user, "created", "transaction", f"Logged: {args['description']} £{amount:.2f}", entity_id=txn["id"])
@@ -697,6 +756,41 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
             if ok:
                 activity_log.log(user, "deleted", "bill", "Removed bill", entity_id=bid)
             return {"ok": ok} if ok else {"ok": False, "error": "Bill not found"}
+        if name == "mark_bill_paid":
+            bid = args.get("bill_id") or _match_id(db.list_bills(), "name", args.get("name_contains"))
+            bill = db.mark_bill_paid(bid) if bid else None
+            if not bill:
+                return {"ok": False, "error": "Bill not found"}
+            activity_log.log(user, "updated", "bill", f"Marked bill paid: {bill['name']}", entity_id=bid)
+            return {"ok": True, "bill": bill}
+        if name == "update_bill":
+            bid = args.get("bill_id") or _match_id(db.list_bills(), "name", args.get("name_contains"))
+            if not bid:
+                return {"ok": False, "error": "Bill not found"}
+            patch = {k: args[k] for k in ("name", "amount", "due_day", "recurrence", "category") if args.get(k) is not None}
+            bill = db.update_bill(bid, patch)
+            if bill:
+                activity_log.log(user, "updated", "bill", f"Updated bill: {bill['name']}", entity_id=bid)
+                return {"ok": True, "bill": bill}
+            return {"ok": False, "error": "Bill not found"}
+        if name == "update_task":
+            tid = args.get("task_id") or _match_id(db.list_tasks(), "title", args.get("title_contains"))
+            if not tid:
+                return {"ok": False, "error": "Task not found"}
+            patch: dict = {k: args[k] for k in ("title", "priority", "remind_at") if args.get(k) is not None}
+            if args.get("assignee") is not None:
+                patch["assignee_id"] = _resolve_assignee(args["assignee"])
+            if args.get("due_date") is not None:
+                patch["due"] = args["due_date"]
+            if args.get("completed") is not None:
+                patch["done"] = bool(args["completed"])
+            task = db.update_task(tid, patch)
+            if not task:
+                return {"ok": False, "error": "Task not found"}
+            activity_log.log(user, "updated", "task", f"Updated task: {task['title']}", entity_id=tid)
+            if "assignee_id" in patch:
+                await notify_task_assignee(task, user, verb="reassigned a task to you")
+            return {"ok": True, "task": task}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)
@@ -714,6 +808,14 @@ def _confirm_summary(tool_name: str, args: dict) -> str:
 async def confirm_action(action_id: str, user: dict) -> dict:
     pending = db.get_pending_action(action_id)
     if not pending or pending["user_id"] != user["id"]:
+        return {"ok": False, "error": "Confirmation expired or not found"}
+    try:
+        # Stored by create_pending_action as an aware UTC isoformat string.
+        expired = datetime.fromisoformat(pending["expires_at"]) < datetime.now(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        expired = False
+    if expired:
+        db.delete_pending_action(action_id)
         return {"ok": False, "error": "Confirmation expired or not found"}
     db.delete_pending_action(action_id)
     result = await execute_tool(pending["tool_name"], pending["args"], user, confirmed=True)
