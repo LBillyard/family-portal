@@ -30,7 +30,8 @@ You can read household data and take actions using tools — calendar, tasks, ap
 Rules:
 - Use tools to perform actions; do not pretend something was done without calling a tool.
 - Dates/times in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM). Today is provided in context.
-- For calendar events, default to the requesting user unless they specify Luke or Laura.
+- For calendar events and appointments, default to the person messaging you (see current_user in context) unless they name the other person or say "for Laura", "my", "I", etc. Pass who it's for as for_user.
+- ALWAYS make clear WHOSE an event/appointment is when you confirm or read it back. Use "you"/"your" when it belongs to the person messaging, otherwise name them — e.g. "You've got a haircut Fri at 2pm" or "Laura has a dentist appointment on Tue 8 Jul at 3pm". The tool result's "for" field (and the "whose" field on events you read) tells you: "you" means the sender, a name means the other person — phrase accordingly.
 - Amounts are in GBP. Expenses are negative when logging transactions.
 - Be concise, warm, and practical. After using a tool, state plainly what you did so it can be corrected.
 - If the user says an entry is wrong or wants to undo/change it, use the update_* or delete_* tools to fix or remove it — prefer the id returned by the previous action, otherwise match by title.
@@ -41,7 +42,7 @@ Rules:
 WHATSAPP_NOTE = """
 
 You are replying over WhatsApp text. Keep replies short (1-3 sentences, no markdown).
-Act immediately on clear instructions, then confirm what you did in one line (e.g. "Booked Dentist, Tue 8 Jul 3pm"). If they reply that it's wrong, correct or undo it with the update_*/delete_* tools."""
+Act immediately on clear instructions, then confirm what you did in one line, naming whose it is: "Booked your dentist, Tue 8 Jul 3pm" or "Added Laura's dentist appt, Tue 8 Jul 3pm". If they reply that it's wrong, correct or undo it with the update_*/delete_* tools."""
 
 TOOLS: list[dict] = [
     {
@@ -440,6 +441,26 @@ def _resolve_user(for_user: str | None, default_id: str) -> str:
     return default_id
 
 
+def _owner_label(owner_id: str | None, sender_id: str) -> str:
+    """How to refer to whose an item is in a reply: 'you' when it belongs to the
+    person messaging, otherwise their first name (e.g. 'Laura'). Lets the model
+    say 'you have a dentist appointment' vs 'Laura has a dentist appointment'."""
+    if not owner_id:
+        return "the family"
+    if owner_id == sender_id:
+        return "you"
+    u = db.get_user(owner_id)
+    return (u or {}).get("name") or "they"
+
+
+def _tag_owner(item: dict, sender_id: str) -> dict:
+    """Annotate a read-tool event/appointment with a 'whose' label so the model can
+    attribute it in replies ('you have…' vs 'Laura has…')."""
+    out = dict(item)
+    out["whose"] = _owner_label(item.get("user_id"), sender_id)
+    return out
+
+
 async def notify_task_assignee(task: dict, sender: dict, verb: str = "added a task for you") -> None:
     """If a task is assigned to the *other* household member, ping them on WhatsApp
     so both people have visibility. Best-effort: never breaks task creation/edits, and
@@ -513,7 +534,8 @@ def build_context(user: dict) -> str:
     today = date.today().isoformat()
     users = db.list_users()
     events = db.list_events()
-    upcoming = [e for e in events if (e.get("start") or "")[:10] >= today][:8]
+    upcoming = [_tag_owner(e, user["id"]) for e in events if (e.get("start") or "")[:10] >= today][:8]
+    appts = [_tag_owner(a, user["id"]) for a in db.list_appointments() if (a.get("datetime") or "")[:10] >= today][:8]
     tasks = [t for t in db.list_tasks() if not t.get("done")][:8]
     trips = db.list_trips()
     summary = db.finance_summary()
@@ -523,6 +545,7 @@ def build_context(user: dict) -> str:
             "current_user": user["name"],
             "household": [{"id": u["id"], "name": u["name"]} for u in users],
             "upcoming_events": upcoming,
+            "upcoming_appointments": appts,
             "open_tasks": tasks,
             "holiday_trips": trips[:5],
             "finance_summary": summary,
@@ -552,18 +575,18 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
     try:
         if name == "get_household_summary":
             return {
-                "events": db.list_events()[:10],
+                "events": [_tag_owner(e, uid) for e in db.list_events()[:10]],
                 "tasks": db.list_tasks(),
                 "bills": db.list_bills(),
                 "trips": db.list_trips(),
                 "finance": db.finance_summary(),
-                "appointments": db.list_appointments()[:10],
+                "appointments": [_tag_owner(a, uid) for a in db.list_appointments()[:10]],
             }
         if name == "list_upcoming_events":
             days = int(args.get("days") or 14)
             cutoff = (date.today() + timedelta(days=days)).isoformat()
             today = date.today().isoformat()
-            events = [e for e in db.list_events() if today <= (e.get("start") or "")[:10] <= cutoff]
+            events = [_tag_owner(e, uid) for e in db.list_events() if today <= (e.get("start") or "")[:10] <= cutoff]
             return {"events": events}
         if name == "create_calendar_event":
             for_user = args.get("for_user")
@@ -592,7 +615,7 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
             except Exception:
                 pass
             activity_log.log(user, "created", "event", f"Added event: {args['title']}", entity_id=event["id"])
-            return {"ok": True, "event": event}
+            return {"ok": True, "event": event, "for": _owner_label(owner, uid)}
         if name == "create_task":
             task = db.create_task(
                 {
@@ -616,6 +639,7 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 return {"ok": False, "error": "Task not found"}
             return {"ok": True, "task": task}
         if name == "create_appointment":
+            owner = _resolve_user(args.get("for_user"), uid)
             appt = db.create_appointment(
                 {
                     "title": args["title"],
@@ -623,11 +647,11 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                     "datetime": args["datetime"],
                     "category": args.get("category", "health"),
                     "location": args.get("location"),
-                    "user_id": _resolve_user(args.get("for_user"), uid),
+                    "user_id": owner,
                 },
                 uid,
             )
-            return {"ok": True, "appointment": appt}
+            return {"ok": True, "appointment": appt, "for": _owner_label(owner, uid)}
         if name == "create_holiday_trip":
             trip = db.create_trip(
                 {
