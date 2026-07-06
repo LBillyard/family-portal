@@ -75,16 +75,29 @@ def _body_text(payload: dict) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-_SYS = """You extract DURABLE household facts worth remembering long-term from emails.
+_SYS = """You extract DURABLE, PERSONAL/HOUSEHOLD facts worth remembering about a FAMILY from their emails. This is a family assistant's memory — it cares about home and personal life, NOT work or business.
 
 Return ONLY JSON, no markdown: {"facts":[{"text": str, "category": "people|places|preferences|possessions", "subject": "family|luke|laura", "source": int}]}
 
-- Keep ONLY lasting facts: car details (make/model/registration/insurer/policy/renewal month), subscriptions & memberships, home/appliance/warranty details, key providers (energy, broadband, bank), addresses, recurring bookings, strong preferences.
-- EXCLUDE: marketing, verification/2FA codes, one-off purchase prices, delivery updates, anything time-limited or trivial.
-- Each fact a short standalone sentence, e.g. "The car is a blue BMW 3 Series, reg AB12 CDE", "Car insurance is with Aviva, renews in March", "They have an Amazon Prime membership", "Home broadband is with BT".
-- "subject" = whose it is: "luke", "laura" or "family".
-- "source" = the [n] number of the email the fact came from.
-- DO NOT repeat anything in ALREADY KNOWN, even reworded. Be conservative — if an email has nothing durable, skip it. Never invent details."""
+KEEP (only genuinely useful personal/household facts):
+- Vehicles: make/model/registration, insurer, policy renewal month.
+- Home: the home address, appliance/furniture warranties, home energy/broadband/mobile provider, home services (cleaner, gardener) and their schedule.
+- Personal subscriptions & memberships the family actually uses (streaming, VPN, gym, clubs).
+- Family/people facts: relatives, kids, pets, key personal dates.
+- Personal insurance/policies (home, car, travel, pet, life).
+
+IGNORE (do NOT extract — return nothing for these):
+- Anything about their WORK or BUSINESS: company accounts, business energy/premises, invoices, clients, staff, terms of business.
+- Developer/technical/cloud/IT: AWS, hosting, servers, domains, SEO, Search Console, API/dev tools, dashboards.
+- Marketing, sales outreach, newsletters, "you might like", offers, or speculative "considering" language.
+- Verification/2FA codes, receipts for single purchases, delivery updates, password resets.
+- Anything trivial, one-off, or time-limited.
+
+RULES:
+- If an email is work/business/technical/marketing, skip it entirely — quality over quantity, a near-empty result is fine.
+- Each fact a short standalone sentence, e.g. "The car is a blue BMW 3 Series, reg AB12 CDE", "Home broadband is Starlink", "They have a weekly cleaner".
+- "subject" = whose it is: "luke", "laura" or "family". "source" = the [n] number of the email.
+- DO NOT repeat anything in ALREADY KNOWN, even reworded. Never invent or guess details."""
 
 
 def _model() -> str:
