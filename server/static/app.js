@@ -997,7 +997,7 @@ function taskEditInner(users, t) {
         <label>Priority<select data-f="priority">${priOpts}</select></label>
         <label>Complete by<input type="date" data-f="due" value="${esc(t.due || '')}"></label>
         <label>Remind me<input type="datetime-local" data-f="remind_at" value="${esc((t.remind_at || '').slice(0, 16))}"></label>
-        <label class="row-edit-check"><input type="checkbox" data-f="notify" checked> Notify owner on WhatsApp if reassigned</label>
+        <label class="row-edit-check"><input type="checkbox" data-f="notify"> Notify owner on WhatsApp</label>
       </div>
       <div class="row-edit-actions">
         <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-task-inline" data-task-id="${t.id}">Save</button>

@@ -1168,8 +1168,12 @@ async def patch_task(task_id: str, body: TaskUpdate, user: dict = Depends(requir
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     reassigned = "assignee_id" in patch and patch["assignee_id"] != before.get("assignee")
-    if reassigned and body.notify:
-        await ai_assistant.notify_task_assignee(task, user, verb="reassigned a task to you")
+    if body.notify:
+        # Ticking Notify sends to the task's owner on THIS save, whether or not the
+        # owner changed. (No-ops when the owner is the sender or the task is
+        # unassigned — you don't get pinged about your own task.)
+        verb = "reassigned a task to you" if reassigned else "updated a task for you"
+        await ai_assistant.notify_task_assignee(task, user, verb=verb)
     return task
 
 
