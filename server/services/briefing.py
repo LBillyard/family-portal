@@ -105,6 +105,20 @@ def _hhmm(s: str) -> str:
     return ""
 
 
+def _ordinal(n: int) -> str:
+    return "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
+def _next_due(day: int, today: date) -> date:
+    """Next occurrence of a monthly due-day (clamped to 28 for short months)."""
+    day = min(max(int(day), 1), 28)
+    if day >= today.day:
+        return today.replace(day=day)
+    month = today.month % 12 + 1
+    year = today.year + (1 if today.month == 12 else 0)
+    return date(year, month, day)
+
+
 def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -> str:
     """One-line, newline-free digest for a WhatsApp template variable ({{1}}).
 
@@ -138,5 +152,23 @@ def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -
 
     sections = [weather] if weather else []
     sections += [diary_part, task_part]
+
+    # Bills due within the next week (unpaid).
+    bills_due = []
+    for bill in db.list_bills():
+        if bill.get("paid") or not bill.get("due_day"):
+            continue
+        nd = _next_due(bill["due_day"], today)
+        if 0 <= (nd - today).days <= 7:
+            bills_due.append((nd, bill["name"]))
+    bills_due.sort(key=lambda x: x[0])
+    if bills_due:
+        sections.append("💷 Due: " + ", ".join(f"{n} ({d.day}{_ordinal(d.day)})" for d, n in bills_due[:4]))
+
+    # Subscriptions/renewals coming up in the next week.
+    if b["urgent_renewals"]:
+        sections.append("🔔 Renewing: " + ", ".join(
+            f"{r['name']} ({r['days_until']}d)" for r in b["urgent_renewals"][:3]))
+
     body = f"{date_str} — " + " · ".join(sections)
     return re.sub(r"\s+", " ", body).strip()[:1000]
