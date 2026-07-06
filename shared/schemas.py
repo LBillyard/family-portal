@@ -112,6 +112,16 @@ class MemoryUpdate(BaseModel):
     pinned: Optional[bool] = None
 
 
+class MemoryImportItem(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    category: Optional[str] = None
+    subject: str = "family"
+
+
+class MemoryImport(BaseModel):
+    facts: List[MemoryImportItem]
+
+
 class TransactionCreate(BaseModel):
     description: str
     amount: float

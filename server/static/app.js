@@ -3086,6 +3086,10 @@ function initActions() {
       }
       return;
     }
+    if (action === 'scan-email-memory') {
+      scanEmailMemory();
+      return;
+    }
     if (action === 'save-memory-new') {
       const f = readInlineFields(document.getElementById('memory-add-form'));
       if (!f.text || !f.text.trim()) { showToast('Type something to remember', true); return; }
@@ -3657,6 +3661,64 @@ async function scanEmailReceipts() {
       await load();
     } catch (err) {
       showToast(err.message, true);
+    }
+  };
+}
+
+async function scanEmailMemory() {
+  showToast('Reading your inbox for facts worth keeping… this can take a moment');
+  let res;
+  try {
+    res = await api('/memory/scan-email', { method: 'POST' });
+  } catch (err) {
+    return showToast(err.message, true);
+  }
+  const cands = res.candidates || [];
+  if (!cands.length) {
+    if ((res.needs_reconnect || []).length) {
+      return showToast('Reconnect Google in Settings to grant Gmail access', true);
+    }
+    return showToast(`No new facts found (scanned ${res.scanned || 0} emails)`);
+  }
+  window._memCands = cands;
+  const rows = cands.map((c, i) => {
+    const cat = MEMORY_CATS[c.category] || MEMORY_CATS.preferences;
+    const src = c.source_from ? `${esc(c.source_from.replace(/<.*>/, '').trim() || c.source_from)}` : '';
+    return `
+      <label class="mem-cand">
+        <input type="checkbox" class="mem-cand-cb" data-idx="${i}" checked>
+        <span class="mem-cand-body">
+          <span class="mem-cand-text">${esc(c.text)}</span>
+          <span class="mem-cand-meta">${cat.icon} ${cat.label} · ${esc(memorySubjectName(c.subject))}${src ? ' · from ' + src : ''}</span>
+        </span>
+      </label>`;
+  }).join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal wf-modal-wide" role="dialog">
+      <div class="wf-modal-header"><h3>Facts found in your email</h3><p>${cands.length} suggestion(s) from ${res.scanned || 0} emails. Untick anything you don't want, then save.</p></div>
+      <div class="wf-modal-body">${rows}</div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="mem-import-btn">Save selected</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('mem-import-btn').onclick = async (e) => {
+    const picked = [...document.querySelectorAll('.mem-cand-cb')]
+      .filter((cb) => cb.checked)
+      .map((cb) => window._memCands[parseInt(cb.dataset.idx, 10)])
+      .map((c) => ({ text: c.text, category: c.category, subject: c.subject }));
+    if (!picked.length) return closeModal();
+    e.target.disabled = true;
+    try {
+      const r = await api('/memory/import-email', { method: 'POST', body: JSON.stringify({ facts: picked }) });
+      closeModal();
+      showToast(`Saved ${r.imported} fact(s) to memory`);
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+      e.target.disabled = false;
     }
   };
 }

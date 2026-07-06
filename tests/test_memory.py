@@ -24,6 +24,14 @@ def _fake_vec(text: str) -> list[float]:
     return vec
 
 
+@pytest.fixture(autouse=True)
+def _clean_memory():
+    """Isolate memory tests — the session DB is shared across test files."""
+    for f in db.list_memory_facts(include_embedding=False):
+        db.delete_memory_fact(f["id"])
+    yield
+
+
 @pytest.fixture()
 def fake_embed(monkeypatch):
     async def _embed(texts):

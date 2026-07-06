@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from server import auth, database as db
 from server.services import csv_import, dashboard as dash, documents as doc_files, google_calendar, openrouter, open_banking
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
-from server.services import memory as mem_svc
+from server.services import memory as mem_svc, gmail_memory
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
@@ -47,6 +47,7 @@ from shared.schemas import (
     MediaUpdate,
     MemberUpdate,
     MemoryCreate,
+    MemoryImport,
     MemoryUpdate,
     SavingsGoalCreate,
     SavingsGoalUpdate,
@@ -710,6 +711,31 @@ def delete_memory(fact_id: str, _: dict = Depends(require_user)):
     if not db.delete_memory_fact(fact_id):
         raise HTTPException(status_code=404, detail="Memory not found")
     return {"ok": True}
+
+
+@router.post("/memory/scan-email")
+async def scan_email_memory(user: dict = Depends(require_user)):
+    """Scan connected Gmail for durable facts worth remembering (read-only, no writes)."""
+    if not mem_svc.is_enabled():
+        raise HTTPException(status_code=503, detail="Memory needs OpenRouter — set OPENROUTER_API_KEY.")
+    if not google_calendar.is_configured():
+        raise HTTPException(status_code=503, detail="Google not configured")
+    try:
+        return await gmail_memory.scan_for_facts(user["id"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Email scan failed: {exc}") from exc
+
+
+@router.post("/memory/import-email")
+async def import_email_memory(body: MemoryImport, user: dict = Depends(require_user)):
+    """Store the facts the user picked from an email scan."""
+    try:
+        stored = await gmail_memory.commit([f.model_dump() for f in body.facts])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not save: {exc}") from exc
+    if stored:
+        activity_svc.log(user, "created", "memory", f"Added {len(stored)} fact(s) from email")
+    return {"imported": len(stored), "facts": stored}
 
 
 @router.post("/transactions")

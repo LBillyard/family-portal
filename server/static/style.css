@@ -2669,6 +2669,14 @@ dialog select:focus {
 .mem-badge.auto { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
 .mem-badge.pinned { background: rgba(219, 119, 0, 0.12); color: #b45309; }
 .mem-fact-actions { display: flex; gap: 4px; flex-shrink: 0; }
+/* Email-scan review modal */
+.wf-modal-wide { max-width: 640px; }
+.mem-cand { display: flex; gap: 10px; align-items: flex-start; padding: 9px 4px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.mem-cand:last-child { border-bottom: none; }
+.mem-cand-cb { margin-top: 3px; flex-shrink: 0; }
+.mem-cand-body { min-width: 0; }
+.mem-cand-text { display: block; font-size: 0.9rem; color: var(--navy-800); }
+.mem-cand-meta { display: block; font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
 .row-edit { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .row-edit .te-input {
   padding: 8px 10px; font-size: 0.9375rem; font-weight: 600; font-family: var(--font);
