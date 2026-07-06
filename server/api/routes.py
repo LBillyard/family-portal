@@ -6,6 +6,7 @@ import os
 import secrets
 import time
 
+from datetime import datetime
 from urllib.parse import quote
 
 from pathlib import Path
@@ -19,6 +20,7 @@ from server.services import assistant as ai_assistant, media as media_files, sub
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
+from server.services import weather as weather_svc
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
 from shared.schemas import (
     AccountUpdate,
@@ -282,7 +284,8 @@ async def whatsapp_test_digest(user: dict = Depends(require_user)):
     phone = (full or {}).get("phone")
     if not phone:
         raise HTTPException(status_code=400, detail="Add your phone number in Settings → Household first")
-    line = briefing_svc.whatsapp_digest_line(full)
+    weather_line = await weather_svc.today_line()
+    line = briefing_svc.whatsapp_digest_line(full, weather=weather_line)
     try:
         await whatsapp_svc.send_digest(phone, line)
     except Exception as exc:
@@ -786,6 +789,15 @@ def api_briefing(user: dict = Depends(require_user)):
     return briefing_svc.build_briefing(user)
 
 
+@router.get("/weather")
+async def api_weather(days: int = 7, _: dict = Depends(require_user)):
+    """Multi-day forecast for the header widget. Follows an upcoming/ongoing holiday."""
+    data = await weather_svc.forecast(days=max(1, min(days, 14)))
+    if not data:
+        return {"configured": False}
+    return {"configured": True, **data}
+
+
 @router.get("/search")
 def api_search(q: str = "", _: dict = Depends(require_user)):
     return search_svc.search(q)
@@ -1123,13 +1135,33 @@ def update_member(user_id: str, body: MemberUpdate, actor: dict = Depends(requir
     return member
 
 
+def _iso_or_none(value: str | None) -> str | None:
+    """Return value if it parses as ISO-8601, else None (drops legacy junk like 'just now')."""
+    if not value:
+        return None
+    try:
+        datetime.fromisoformat(value)
+        return value
+    except (ValueError, TypeError):
+        return None
+
+
 @router.get("/settings")
 def api_settings(_: dict = Depends(require_user)):
     users = [db.user_public(u) for u in db.list_users()]
+    google_last = _iso_or_none(db.get_setting("google_last_sync", None))
+    banking_last = _iso_or_none(db.get_setting("banking_last_sync", None))
+    last_sync = max([t for t in (google_last, banking_last) if t], default=None)
     return {
         "users": users,
         "documents": db.list_documents(),
-        "sync": {"google_last": db.get_setting("google_last_sync", "never"), "status": "ok"},
+        "sync": {
+            "google_last": google_last,
+            "banking_last": banking_last,
+            "last_sync": last_sync,
+            "auto_sync": "hourly",
+            "status": "ok",
+        },
         "google_accounts": db.list_google_accounts(),
         "integrations": {
             "google_calendar": google_calendar.is_configured(),
@@ -1139,6 +1171,7 @@ def api_settings(_: dict = Depends(require_user)):
             "google_writeback": google_calendar.is_configured(),
             "receipt_scan": openrouter.is_configured(),
             "whatsapp": whatsapp_svc.is_configured(),
+            "weather": weather_svc.is_configured(),
         },
         "notification_log": db.list_notification_log(10),
     }

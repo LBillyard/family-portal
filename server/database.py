@@ -306,6 +306,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )"""
     )
 
+    tripcols = {r[1] for r in conn.execute("PRAGMA table_info(holiday_trips)").fetchall()}
+    if "destination" not in tripcols:
+        conn.execute("ALTER TABLE holiday_trips ADD COLUMN destination TEXT")
+
     dcols = {r[1] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
     for col, ddl in [
         ("category", "ALTER TABLE documents ADD COLUMN category TEXT NOT NULL DEFAULT 'other'"),
@@ -1282,6 +1286,7 @@ def list_trips() -> list[dict]:
                 "status": d["status"],
                 "start": d.get("start_date"),
                 "end": d.get("end_date"),
+                "destination": d.get("destination"),
                 "budget": d["budget"],
                 "spent": d["spent"],
                 "days_until": days_until,
@@ -1298,8 +1303,8 @@ def create_trip(data: dict) -> dict:
     tid = _new_id()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO holiday_trips (id, title, status, start_date, end_date, budget, spent) VALUES (?, ?, ?, ?, ?, ?, 0)",
-            (tid, data["title"], data.get("status", "idea"), data.get("start"), data.get("end"), data.get("budget", 0)),
+            "INSERT INTO holiday_trips (id, title, status, start_date, end_date, budget, spent, destination) VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+            (tid, data["title"], data.get("status", "idea"), data.get("start"), data.get("end"), data.get("budget", 0), data.get("destination")),
         )
     trips = list_trips()
     return next(t for t in trips if t["id"] == tid)
@@ -1313,6 +1318,7 @@ def update_trip(trip_id: str, data: dict) -> Optional[dict]:
         "end": "end_date",
         "budget": "budget",
         "spent": "spent",
+        "destination": "destination",
     }
     fields = []
     values = []

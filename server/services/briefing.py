@@ -93,11 +93,14 @@ def _hhmm(s: str) -> str:
     return ""
 
 
-def whatsapp_digest_line(user: dict | None = None) -> str:
+def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -> str:
     """One-line, newline-free digest for a WhatsApp template variable ({{1}}).
 
     Meta rejects template parameters containing newlines/tabs, so this uses
-    ' · ' between sections and ', ' between items. Kept under ~1000 chars."""
+    ' · ' between sections and ', ' between items. Kept under ~1000 chars.
+
+    `weather` (if provided) is appended as a leading section — pass the result of
+    server.services.weather.today_line(), fetched by the async caller."""
     b = build_briefing(user)
     today = date.fromisoformat(b["date"])
     date_str = f"{today.strftime('%A')} {today.day} {today.strftime('%b')}"
@@ -121,5 +124,7 @@ def whatsapp_digest_line(user: dict | None = None) -> str:
     else:
         task_part = "✅ No outstanding tasks"
 
-    body = f"{date_str} — {diary_part} · {task_part}"
+    sections = [weather] if weather else []
+    sections += [diary_part, task_part]
+    body = f"{date_str} — " + " · ".join(sections)
     return re.sub(r"\s+", " ", body).strip()[:1000]

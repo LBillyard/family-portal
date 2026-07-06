@@ -167,8 +167,15 @@ async def _api_get(access_token: str, path: str, params: dict | None = None) -> 
 
 
 async def fetch_accounts(access_token: str) -> list[dict]:
-    data = await _api_get(access_token, "/accounts")
-    return data.get("results", [])
+    # Card-only providers (e.g. Amex) return 404/501 for /accounts — treat as
+    # "no accounts" so the sync continues to /cards instead of aborting.
+    try:
+        data = await _api_get(access_token, "/accounts")
+        return data.get("results", [])
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (403, 404, 501):
+            return []
+        raise
 
 
 async def fetch_cards(access_token: str) -> list[dict]:
@@ -176,7 +183,7 @@ async def fetch_cards(access_token: str) -> list[dict]:
         data = await _api_get(access_token, "/cards")
         return data.get("results", [])
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in (403, 404):
+        if exc.response.status_code in (403, 404, 501):
             return []
         raise
 
@@ -200,7 +207,13 @@ async def fetch_card_balance(access_token: str, card_id: str) -> Optional[float]
         if not results:
             return None
         row = results[0]
-        return float(row.get("current") or row.get("available") or 0)
+        # TrueLayer already signs a credit card's balance as negative when money
+        # is owed (e.g. -83.38), so store it as-is — the portal then shows the
+        # amount owed as a negative balance.
+        current = row.get("current")
+        if current is None:
+            current = row.get("available") or 0
+        return float(current)
     except httpx.HTTPStatusError:
         return None
 
@@ -341,5 +354,5 @@ async def sync_connection(connection: dict, db) -> dict:
         synced_accounts += 1
 
     db.mark_connection_synced(connection["id"])
-    db.set_setting("banking_last_sync", "just now")
+    db.set_setting("banking_last_sync", datetime.now(timezone.utc).isoformat())
     return {"accounts": synced_accounts, "transactions": synced_txns}

@@ -146,7 +146,7 @@ def sync_account(account: dict) -> int:
     except Exception:
         pass
     db.mark_google_account_synced(account["id"])
-    db.set_setting("google_last_sync", datetime.now().strftime("%H:%M today"))
+    db.set_setting("google_last_sync", datetime.now(timezone.utc).isoformat())
     logger.info("Synced %d events for Google account %s", count, account.get("email"))
     return count
 

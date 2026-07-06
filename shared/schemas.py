@@ -85,6 +85,7 @@ class TripCreate(BaseModel):
     start: Optional[str] = None
     end: Optional[str] = None
     budget: float = 0
+    destination: Optional[str] = None
 
 
 class TripUpdate(BaseModel):
@@ -94,6 +95,7 @@ class TripUpdate(BaseModel):
     end: Optional[str] = None
     budget: Optional[float] = None
     spent: Optional[float] = None
+    destination: Optional[str] = None
 
 
 class MemberUpdate(BaseModel):

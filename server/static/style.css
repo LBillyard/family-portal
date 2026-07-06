@@ -3352,6 +3352,121 @@ dialog select:focus {
 .notif-item.unread { background: var(--accent-light); }
 .notif-item time { display: block; font-size: 0.6875rem; color: var(--text-muted); margin-top: 4px; }
 
+/* --- Weather header button + forecast panel --- */
+
+.weather-btn {
+  width: auto;
+  gap: 5px;
+  padding: 0 11px;
+}
+.weather-btn-icon { font-size: 1.05rem; line-height: 1; }
+.weather-btn-temp { font-size: 0.8125rem; font-weight: 700; }
+.weather-btn-temp:empty { display: none; }
+
+.weather-panel .notif-panel-header .wx-loc-badge {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-light);
+  color: var(--accent, #00a89e);
+  margin-left: 8px;
+}
+.weather-panel .notif-panel-header .wx-loc-badge.holiday { background: #fef3c7; color: #b45309; }
+
+.wx-current {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-light);
+}
+.wx-current-emoji { font-size: 2.5rem; line-height: 1; }
+.wx-current-temp { font-size: 1.75rem; font-weight: 700; color: var(--navy-900); }
+.wx-current-desc { font-size: 0.8125rem; color: var(--text-muted); text-transform: capitalize; }
+
+.wx-day {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 0.8125rem;
+}
+.wx-day:last-child { border-bottom: none; }
+.wx-day-name { width: 46px; font-weight: 600; color: var(--navy-900); }
+.wx-day-emoji { font-size: 1.15rem; width: 24px; text-align: center; }
+.wx-day-desc { flex: 1; color: var(--text-muted); text-transform: capitalize; }
+.wx-day-rain { font-size: 0.6875rem; color: var(--accent, #00a89e); font-weight: 600; }
+.wx-day-temp { font-weight: 600; color: var(--navy-900); white-space: nowrap; }
+.wx-day-temp .lo { color: var(--text-muted); font-weight: 500; }
+
+.wx-empty { padding: 20px; font-size: 0.8125rem; color: var(--text-muted); text-align: center; }
+
+/* --- Settings: system status, integrations, accounts --- */
+
+.sync-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.sync-status-main { display: flex; align-items: center; gap: 8px; font-size: 0.875rem; color: var(--navy-900); }
+.sync-status-time { font-size: 0.8125rem; color: var(--text-muted); }
+
+.settings-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 10px;
+}
+.settings-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 8px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+}
+.settings-stat-num { font-size: 1.375rem; font-weight: 700; color: var(--navy-900); }
+.settings-stat-label { font-size: 0.6875rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+
+.status-badge {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.status-badge.ok { background: var(--accent-light); color: var(--accent, #00a89e); }
+.status-badge.off { background: var(--surface-muted); color: var(--text-muted); }
+
+.settings-accounts { margin-top: 12px; border-top: 1px solid var(--border-light); }
+.acct-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 0.8125rem;
+}
+.acct-line:last-child { border-bottom: none; }
+.acct-line-name { color: var(--navy-900); font-weight: 500; }
+.acct-line-type { font-size: 0.6875rem; color: var(--text-muted); text-transform: uppercase; margin-left: 6px; }
+.acct-line-bal { font-weight: 700; color: var(--navy-900); }
+.acct-line-bal.neg { color: var(--red, #dc2626); }
+
 /* --- Stat trend --- */
 
 .stat-trend {

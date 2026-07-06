@@ -18,6 +18,7 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 from server import database as db  # noqa: E402
 from server.services import briefing as briefing_svc  # noqa: E402
+from server.services import weather as weather_svc  # noqa: E402
 from server.services import whatsapp  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -29,13 +30,14 @@ async def run() -> int:
         logger.warning("WhatsApp not configured — set WHATSAPP_TOKEN / WHATSAPP_PHONE_NUMBER_ID. Skipping.")
         return 0
     sent = 0
+    weather_line = await weather_svc.today_line()  # same location for the whole household
     for u in db.list_users():
         full = db.get_user(u["id"])
         phone = (full or {}).get("phone")
         if not phone:
             logger.info("No phone for %s — skipping", u["name"])
             continue
-        line = briefing_svc.whatsapp_digest_line(full)
+        line = briefing_svc.whatsapp_digest_line(full, weather=weather_line)
         try:
             await whatsapp.send_digest(phone, line)
             sent += 1

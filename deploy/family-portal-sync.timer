@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Family Portal auto-sync every hour
+
+[Timer]
+# Every hour, on the hour. Persistent catches up after downtime.
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

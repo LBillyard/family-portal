@@ -86,6 +86,21 @@ const fmt = {
     if (!iso) return '—';
     return `${fmt.date(iso)} · ${fmt.time(iso)}`;
   },
+  relative(iso) {
+    if (!iso) return 'never';
+    const then = new Date(iso).getTime();
+    if (isNaN(then)) return 'never';
+    const min = Math.floor((Date.now() - then) / 60000);
+    if (min < 0) return 'just now';
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min} min ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr} hr ago`;
+    const days = Math.floor(hr / 24);
+    if (days === 1) return 'yesterday';
+    if (days < 7) return `${days} days ago`;
+    return fmt.date(iso);
+  },
   greeting() {
     const h = new Date().getHours();
     if (h < 12) return 'Good morning';
@@ -169,6 +184,7 @@ const MODALS = {
     desc: 'Start from scratch or promote a saved AI idea.',
     fields: [
       { label: 'Trip name', type: 'text', placeholder: 'e.g. Summer city break' },
+      { label: 'Destination', type: 'text', placeholder: 'e.g. Barcelona, Spain — used for weather' },
       { label: 'Status', type: 'select', options: ['Idea', 'Planning', 'Booked'] },
       { label: 'Start date', type: 'date', value: '' },
       { label: 'Budget (£)', type: 'number', value: '800' },
@@ -367,6 +383,7 @@ async function submitModal(key) {
         method: 'POST',
         body: JSON.stringify({
           title: f['Trip name'],
+          destination: f['Destination'] || null,
           status: (f['Status'] || 'idea').toLowerCase(),
           start: f['Start date'] || null,
           end: null,
@@ -594,6 +611,7 @@ function openEditTripModal(tripId) {
       <div class="wf-modal-header"><h3>Edit trip</h3><p>Update dates, status and budget.</p></div>
       <div class="wf-modal-body">
         <label class="field field-full"><span>Title</span><input type="text" id="et-title" value="${esc(trip.title)}"></label>
+        <label class="field field-full"><span>Destination</span><input type="text" id="et-destination" value="${esc(trip.destination || '')}" placeholder="e.g. Barcelona, Spain — used for weather"></label>
         <label class="field field-full"><span>Status</span><select id="et-status">${statusOpts}</select></label>
         <label class="field field-full"><span>Start date</span><input type="date" id="et-start" value="${(trip.start || '').slice(0, 10)}"></label>
         <label class="field field-full"><span>End date</span><input type="date" id="et-end" value="${(trip.end || '').slice(0, 10)}"></label>
@@ -612,6 +630,7 @@ function openEditTripModal(tripId) {
         method: 'PATCH',
         body: JSON.stringify({
           title: document.getElementById('et-title').value.trim(),
+          destination: document.getElementById('et-destination').value.trim(),
           status: document.getElementById('et-status').value,
           start: document.getElementById('et-start').value || null,
           end: document.getElementById('et-end').value || null,
@@ -1634,33 +1653,64 @@ async function openTripDetailModal(tripId) {
 }
 
 function renderSettings(data) {
-  const { users, sync, notification_log = [], integrations = {}, google_accounts = [] } = data;
+  const { users, sync = {}, notification_log = [], integrations = {}, google_accounts = [] } = data;
   const googleOk = integrations.google_calendar;
   const aiOk = integrations.openrouter;
   const bankOk = integrations.open_banking;
   const bankConns = store.finances?.connections || [];
+  const accounts = store.finances?.accounts || [];
   const docCount = store.documents?.documents?.length || 0;
 
+  const counts = [
+    { n: store.calendar?.events?.length || 0, label: 'Events' },
+    { n: (store.dashboard?.tasks || []).filter((t) => !t.done).length, label: 'Open tasks' },
+    { n: store.appointments?.appointments?.length || 0, label: 'Appointments' },
+    { n: accounts.length, label: 'Accounts' },
+    { n: store.finances?.transactions?.length || 0, label: 'Transactions' },
+    { n: store.holidays?.trips?.length || 0, label: 'Trips' },
+    { n: docCount, label: 'Documents' },
+  ];
+  const integ = [
+    { key: 'google_calendar', icon: '📅', name: 'Google Calendar', on: 'Calendars sync hourly', off: 'Add GOOGLE_CLIENT_ID to .env' },
+    { key: 'open_banking', icon: '🏦', name: 'Open Banking (TrueLayer)', on: 'Balances & transactions', off: 'Add TRUELAYER_CLIENT_ID to .env' },
+    { key: 'openrouter', icon: '✨', name: 'OpenRouter AI', on: 'Holiday ideas, assistant & receipt scan', off: 'Add OPENROUTER_API_KEY to .env' },
+    { key: 'whatsapp', icon: '💬', name: 'WhatsApp (Twilio)', on: '7am digest + two-way assistant', off: 'Configure Twilio in .env' },
+    { key: 'weather', icon: '🌤️', name: 'Weather', on: 'Daily forecast, holiday-aware', off: 'Add WEATHER_LATITUDE/LONGITUDE to .env' },
+    { key: 'email', icon: '✉️', name: 'Email reminders (SMTP)', on: 'Renewal alerts configured', off: 'Add SMTP_* and NOTIFY_EMAIL to .env' },
+    { key: 'receipt_scan', icon: '🧾', name: 'Receipt scanning', on: 'Vision OCR ready on Finances', off: 'Add OPENROUTER_API_KEY to .env' },
+    { key: 'google_writeback', icon: '↩️', name: 'Calendar write-back', on: 'Portal events push to Google', off: 'Configure Google OAuth' },
+  ];
+
   document.getElementById('settings-content').innerHTML = `
-    <div class="settings-section phase-checklist">
-      <h3>Build progress</h3>
-      <p>The Hub — ready to deploy when you are.</p>
-      <ul class="phase-list">
-        <li class="done">✓ SQLite database + CRUD</li>
-        <li class="done">✓ Household login (2 users)</li>
-        <li class="done">✓ Google Calendar OAuth + sync</li>
-        <li class="done">✓ OpenRouter AI holiday ideas</li>
-        <li class="done">✓ Open Banking (TrueLayer)</li>
-        <li class="done">✓ CSV bank import</li>
-        <li class="done">✓ PWA (add to home screen)</li>
-        <li>○ Deploy to AWS (see docs/DEPLOY.md)</li>
-      </ul>
+    <div class="settings-section">
+      <h3>System status</h3>
+      <p>The Hub keeps itself up to date — Google Calendar and banks re-sync automatically every hour.</p>
+      <div class="sync-status-row">
+        <div class="sync-status-main"><span class="sync-dot"></span> Auto-sync <strong>hourly</strong></div>
+        <div class="sync-status-time">Last sync: ${sync.last_sync ? fmt.relative(sync.last_sync) : 'not yet'}</div>
+      </div>
+      <div class="settings-stat-grid">
+        ${counts.map((c) => `<div class="settings-stat"><span class="settings-stat-num">${c.n}</span><span class="settings-stat-label">${c.label}</span></div>`).join('')}
+      </div>
     </div>
     <div class="settings-section">
-      <h3>Login &amp; access</h3>
-      <p>Change your password or preview the login screen.</p>
-      <button class="btn btn-primary wf-action" data-action="change-password">Change password</button>
-      <button class="btn btn-outline wf-action" data-action="preview-login" style="margin-left:8px">Preview login screen</button>
+      <h3>Integrations</h3>
+      <p>Connected services powering The Hub. Configure in the server <code>.env</code>.</p>
+      ${integ
+        .map(
+          (i) => `
+        <div class="connection-row">
+          <div class="connection-info">
+            <div class="connection-icon">${i.icon}</div>
+            <div>
+              <div class="connection-name">${i.name}</div>
+              <div class="connection-status ${integrations[i.key] ? 'connected' : ''}">${integrations[i.key] ? i.on : i.off}</div>
+            </div>
+          </div>
+          <span class="status-badge ${integrations[i.key] ? 'ok' : 'off'}">${integrations[i.key] ? 'On' : 'Off'}</span>
+        </div>`
+        )
+        .join('')}
     </div>
     <div class="settings-section">
       <h3>Calendar connections</h3>
@@ -1705,6 +1755,15 @@ function renderSettings(data) {
             .join('')
         : `<p style="font-size:0.875rem;color:var(--text-muted)">No banks connected yet — use Finances → Connect bank.</p>`}
       <button class="btn btn-sm btn-primary wf-action" data-action="connect-bank" style="margin-top:10px" ${bankOk ? '' : 'disabled'}>Connect Starling / Revolut / Amex / Virgin</button>
+      ${accounts.length ? `
+      <div class="settings-accounts">
+        ${accounts
+          .map(
+            (a) => `<div class="acct-line"><span class="acct-line-name">${esc(a.name)} <span class="acct-line-type">${esc(a.type)}</span></span><span class="acct-line-bal ${a.balance < 0 ? 'neg' : ''}">${fmt.gbp(a.balance)}</span></div>`
+          )
+          .join('')}
+      </div>
+      <p class="hint-small" style="margin-top:8px">Credit cards show what you owe as a negative balance. An account stuck at £0.00 (e.g. Amex) needs reconnecting above to re-sync.</p>` : ''}
     </div>
     <div class="settings-section">
       <h3>WhatsApp assistant</h3>
@@ -1726,31 +1785,23 @@ function renderSettings(data) {
       <button class="btn btn-sm btn-primary wf-action" data-action="whatsapp-test" style="margin-top:10px" ${integrations.whatsapp ? '' : 'disabled title="Configure WhatsApp in .env first"'}>Send me a test digest</button>
     </div>
     <div class="settings-section">
-      <h3>Email reminders</h3>
-      <p>SMTP renewal alerts — ${integrations.email ? 'configured' : 'add SMTP_* and NOTIFY_EMAIL to .env'}.</p>
-      <button class="btn btn-sm btn-primary wf-action" data-action="send-reminders" ${integrations.email ? '' : 'disabled'}>Send test reminders</button>
-    </div>
-    <div class="settings-section">
-      <h3>Google Calendar write-back</h3>
-      <p>Portal events push to Google — ${integrations.google_writeback ? 'available (reconnect Google after scope update)' : 'configure Google OAuth'}.</p>
-    </div>
-    <div class="settings-section">
-      <h3>Receipt scanning</h3>
-      <p>Vision OCR via OpenRouter — ${integrations.receipt_scan ? 'ready on Finances tab' : 'add OPENROUTER_API_KEY'}.</p>
-    </div>
-    <div class="settings-section">
-      <h3>AI — OpenRouter</h3>
-      <p>Holiday ideas — ${aiOk ? 'API key configured' : 'add OPENROUTER_API_KEY to .env'}.</p>
+      <h3>Weather</h3>
+      <p>Daily forecast in the header and morning digest — ${integrations.weather ? 'configured' : 'set WEATHER_LATITUDE / WEATHER_LONGITUDE in .env'}. Automatically switches to your holiday destination when a trip is coming up.</p>
       <div class="connection-row">
         <div class="connection-info">
-          <div class="connection-icon">✨</div>
+          <div class="connection-icon">🌤️</div>
           <div>
-            <div class="connection-name">OpenRouter API</div>
-            <div class="connection-status ${aiOk ? 'connected' : ''}">${aiOk ? 'Connected — powering holiday ideas, assistant & receipt scan' : 'Not configured — add OPENROUTER_API_KEY to .env'}</div>
+            <div class="connection-name">Home forecast${weatherData && weatherData.label ? ' — ' + esc(weatherData.label) : ''}</div>
+            <div class="connection-status ${integrations.weather ? 'connected' : ''}">${integrations.weather ? (weatherData && weatherData.current && weatherData.current.temp != null ? `${weatherData.current.emoji || ''} ${weatherData.current.temp}°C, ${esc(weatherData.current.desc || '')}` : 'Configured') : 'Not configured'}${weatherData && weatherData.holiday ? ' · following holiday' : ''}</div>
           </div>
         </div>
-        <button class="btn btn-sm btn-ai wf-action" data-action="holiday-idea" data-modal="holiday-ai" ${aiOk ? '' : 'disabled title="Configure OpenRouter in .env"'}>${aiOk ? 'Try it' : 'Configure'}</button>
+        <button class="btn btn-sm btn-outline" id="settings-weather-open">View forecast</button>
       </div>
+    </div>
+    <div class="settings-section">
+      <h3>Email renewal reminders</h3>
+      <p>SMTP alerts before documents &amp; policies expire — ${integrations.email ? 'configured' : 'add SMTP_* and NOTIFY_EMAIL to .env'}.</p>
+      <button class="btn btn-sm btn-primary wf-action" data-action="send-reminders" ${integrations.email ? '' : 'disabled'}>Send test reminders</button>
     </div>
     <div class="settings-section">
       <h3>Household members</h3>
@@ -1774,11 +1825,21 @@ function renderSettings(data) {
       <button class="btn btn-sm btn-primary wf-action" data-tab-link="documents">Open document vault</button>
     </div>
     <div class="settings-section">
+      <h3>Login &amp; access</h3>
+      <p>Change your password or preview the login screen.</p>
+      <button class="btn btn-primary wf-action" data-action="change-password">Change password</button>
+      <button class="btn btn-outline wf-action" data-action="preview-login" style="margin-left:8px">Preview login screen</button>
+    </div>
+    <div class="settings-section">
       <h3>Recent notifications</h3>
       ${notification_log.length ? notification_log.map((n) => `<div class="list-item" style="padding:10px 0"><div class="list-item-body"><div class="list-item-title">${esc(n.subject || n.recipient || 'Email')}</div><div class="list-item-meta">${esc(n.sent_at || '')} · ${esc(n.status || '')}</div></div></div>`).join('') : '<p class="hint-small">No emails sent yet.</p>'}
     </div>`;
 
-  document.getElementById('sync-pill').innerHTML = `<span class="sync-dot"></span> Synced ${sync.google_last}`;
+  const swBtn = document.getElementById('settings-weather-open');
+  if (swBtn) swBtn.onclick = openWeather;
+
+  const pill = document.getElementById('sync-pill');
+  if (pill) pill.innerHTML = `<span class="sync-dot"></span> ${sync.last_sync ? 'Synced ' + fmt.relative(sync.last_sync) : 'Not synced yet'}`;
 }
 
 function openSearchModal() {
@@ -2304,10 +2365,15 @@ function initActions() {
   document.getElementById('notif-close').onclick = closeNotif;
   document.getElementById('notif-backdrop').onclick = closeNotif;
 
+  document.getElementById('weather-btn').onclick = openWeather;
+  document.getElementById('weather-close').onclick = closeWeather;
+  document.getElementById('weather-backdrop').onclick = closeWeather;
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeModal();
       closeNotif();
+      closeWeather();
       closeLoginPreview();
     }
   });
@@ -2469,6 +2535,72 @@ function initActions() {
 function closeNotif() {
   document.getElementById('notif-panel').hidden = true;
   document.getElementById('notif-backdrop').hidden = true;
+}
+
+let weatherData = null;
+
+async function loadWeather() {
+  try {
+    weatherData = await api('/weather?days=7');
+  } catch (err) {
+    weatherData = null;
+  }
+  const iconEl = document.getElementById('weather-btn-icon');
+  const tempEl = document.getElementById('weather-btn-temp');
+  const cur = (weatherData && weatherData.configured && weatherData.current) || {};
+  if (iconEl) iconEl.textContent = cur.emoji || '🌡️';
+  if (tempEl) tempEl.textContent = cur.temp != null ? `${cur.temp}°` : '';
+}
+
+function renderWeatherPanel() {
+  const title = document.getElementById('weather-panel-title');
+  const body = document.getElementById('weather-panel-body');
+  if (!body) return;
+  if (!weatherData || !weatherData.configured) {
+    if (title) title.textContent = 'Weather';
+    body.innerHTML = '<div class="wx-empty">Weather isn’t set up yet — add WEATHER_LATITUDE and WEATHER_LONGITUDE to the server .env.</div>';
+    return;
+  }
+  const d = weatherData;
+  const badge = d.holiday
+    ? '<span class="wx-loc-badge holiday">Holiday</span>'
+    : '<span class="wx-loc-badge">Home</span>';
+  if (title) title.innerHTML = `${esc(d.label || 'Weather')} ${badge}`;
+  const cur = d.current || {};
+  const curHtml = `
+    <div class="wx-current">
+      <span class="wx-current-emoji">${cur.emoji || '🌡️'}</span>
+      <div>
+        <div class="wx-current-temp">${cur.temp != null ? `${cur.temp}°C` : '—'}</div>
+        <div class="wx-current-desc">${esc(cur.desc || '')}${d.holiday && d.trip ? ` · ${esc(d.trip)}` : ''}</div>
+      </div>
+    </div>`;
+  const daysHtml = (d.days || [])
+    .map((day) => `
+    <div class="wx-day">
+      <span class="wx-day-name">${esc(day.weekday)}</span>
+      <span class="wx-day-emoji">${day.emoji || ''}</span>
+      <span class="wx-day-desc">${esc(day.desc)}${day.precip != null && day.precip >= 30 ? ` <span class="wx-day-rain">${day.precip}%</span>` : ''}</span>
+      <span class="wx-day-temp">${day.tmax}° <span class="lo">${day.tmin}°</span></span>
+    </div>`)
+    .join('');
+  body.innerHTML = curHtml + (daysHtml || '<div class="wx-empty">No forecast available.</div>');
+}
+
+async function openWeather() {
+  renderWeatherPanel();
+  document.getElementById('weather-panel').hidden = false;
+  document.getElementById('weather-backdrop').hidden = false;
+  if (!weatherData) {
+    document.getElementById('weather-panel-body').innerHTML = '<div class="wx-empty">Loading forecast…</div>';
+    await loadWeather();
+    renderWeatherPanel();
+  }
+}
+
+function closeWeather() {
+  document.getElementById('weather-panel').hidden = true;
+  document.getElementById('weather-backdrop').hidden = true;
 }
 
 const TOOL_LABELS = {
@@ -2647,6 +2779,8 @@ async function load() {
     showLogin();
     return;
   }
+
+  loadWeather();  // refresh header forecast (also picks up holiday-location changes)
 
   const [dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance] = await Promise.all([
     api('/dashboard'),
