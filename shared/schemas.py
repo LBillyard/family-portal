@@ -67,11 +67,17 @@ class TaskCreate(BaseModel):
     assignee_id: Optional[str] = None
     due: Optional[str] = None
     priority: Literal["high", "medium", "low"] = "medium"
+    remind_at: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
     done: Optional[bool] = None
     title: Optional[str] = None
+    assignee_id: Optional[str] = None
+    due: Optional[str] = None
+    priority: Optional[Literal["high", "medium", "low"]] = None
+    remind_at: Optional[str] = None
+    notify: Optional[bool] = None
 
 
 class AppointmentCreate(BaseModel):

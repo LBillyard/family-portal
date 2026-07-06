@@ -178,6 +178,7 @@ const MODALS = {
       { label: 'Assign to', type: 'select', options: ['Luke', 'Laura', 'Either'] },
       { label: 'Due date', type: 'date', value: '2026-07-10' },
       { label: 'Priority', type: 'select', options: ['High', 'Medium', 'Low'] },
+      { label: 'Remind me', type: 'datetime-local', value: '' },
     ],
   },
   'new-trip': {
@@ -391,6 +392,7 @@ async function submitModal(key) {
           assignee_id: assignee.includes('laura') ? 'partner' : 'luke',
           due: f['Due date'] || null,
           priority: (f['Priority'] || 'medium').toLowerCase(),
+          remind_at: f['Remind me'] || null,
         }),
       });
     } else if (key === 'new-trip') {
@@ -898,6 +900,102 @@ function renderReminders(reminders) {
     .join('');
 }
 
+function taskRow(users, t) {
+  const remindLabel = t.remind_at ? `⏰ ${fmt.datetime(t.remind_at)}` : '';
+  return `
+    <div class="task-item${t.done ? ' done' : ''}">
+      <div class="task-check${t.done ? ' done' : ''} wf-action" data-action="toggle-task" data-task-id="${t.id}" data-done="${t.done ? '1' : '0'}"></div>
+      <div class="task-body">
+        <div class="task-title">${esc(t.title)}</div>
+        <div class="task-meta">
+          ${userName(users, t.assignee)}
+          ${t.due ? `· Due ${fmt.date(t.due)}` : ''}
+          ${remindLabel ? `· ${remindLabel}` : ''}
+          <span class="priority-tag ${t.priority}">${t.priority}</span>
+        </div>
+      </div>
+      <button class="task-edit-btn wf-action" data-action="edit-task" data-task-id="${t.id}" title="Edit task" aria-label="Edit task">✎</button>
+    </div>`;
+}
+
+function openAllTasksModal() {
+  const users = store.dashboard?.users || [];
+  const tasks = store.dashboard?.tasks || [];
+  const sorted = [...tasks].sort((a, b) => Number(a.done) - Number(b.done) || (a.due || '').localeCompare(b.due || ''));
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal wf-modal-wide" role="dialog">
+      <div class="wf-modal-header"><h3>All tasks</h3><p>Tick, untick, or edit any household task.</p></div>
+      <div class="wf-modal-body">${sorted.map((t) => taskRow(users, t)).join('') || '<p class="hint-small">No tasks yet.</p>'}</div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Close</button>
+        <button type="button" class="btn btn-primary wf-action" data-action="add-task" data-modal="add-task">+ Add task</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+}
+
+function openEditTaskModal(taskId) {
+  const users = store.dashboard?.users || [];
+  const tasks = store.dashboard?.tasks || [];
+  const t = tasks.find((x) => String(x.id) === String(taskId));
+  if (!t) return showToast('Task not found', true);
+  const userOpts = users.map((u) => `<option value="${u.id}"${u.id === t.assignee ? ' selected' : ''}>${esc(u.name)}</option>`).join('');
+  const priOpts = ['high', 'medium', 'low'].map((p) => `<option value="${p}"${p === t.priority ? ' selected' : ''}>${p}</option>`).join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Edit task</h3><p>Reassign, reschedule, or set a reminder.</p></div>
+      <div class="wf-modal-body">
+        <label class="field field-full"><span>Task</span><input type="text" id="et-title" value="${esc(t.title)}"></label>
+        <label class="field"><span>Owner</span><select id="et-assignee">${userOpts}</select></label>
+        <label class="field"><span>Priority</span><select id="et-priority">${priOpts}</select></label>
+        <label class="field"><span>Complete by</span><input type="date" id="et-due" value="${esc(t.due || '')}"></label>
+        <label class="field"><span>Remind me</span><input type="datetime-local" id="et-remind" value="${esc((t.remind_at || '').slice(0, 16))}"></label>
+        <label class="field field-full" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="et-notify" checked style="width:auto"><span>Notify the owner on WhatsApp if reassigned</span>
+        </label>
+      </div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-ghost" id="et-delete" style="margin-right:auto">Delete</button>
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="et-save">Save</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('et-save').onclick = async () => {
+    try {
+      await api(`/tasks/${taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: document.getElementById('et-title').value.trim(),
+          assignee_id: document.getElementById('et-assignee').value,
+          priority: document.getElementById('et-priority').value,
+          due: document.getElementById('et-due').value || null,
+          remind_at: document.getElementById('et-remind').value || null,
+          notify: document.getElementById('et-notify').checked,
+        }),
+      });
+      closeModal();
+      showToast('Task updated');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+  document.getElementById('et-delete').onclick = async () => {
+    if (!confirm('Delete this task?')) return;
+    try {
+      await api(`/tasks/${taskId}`, { method: 'DELETE' });
+      closeModal();
+      showToast('Task deleted');
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
+}
+
 function renderHome(data) {
   const { users, upcoming_events, upcoming_bills, upcoming_appointments, next_holiday, finance_summary, tasks, documents } = data;
 
@@ -925,21 +1023,8 @@ function renderHome(data) {
 
   document.getElementById('home-tasks').innerHTML = tasks
     .slice(0, 4)
-    .map(
-      (t) => `
-    <div class="task-item${t.done ? ' done' : ''}">
-      <div class="task-check${t.done ? ' done' : ''} wf-action" data-action="toggle-task" data-task-id="${t.id}"></div>
-      <div class="task-body">
-        <div class="task-title">${esc(t.title)}</div>
-        <div class="task-meta">
-          ${userName(users, t.assignee)}
-          ${t.due ? `· Due ${fmt.date(t.due)}` : ''}
-          <span class="priority-tag ${t.priority}">${t.priority}</span>
-        </div>
-      </div>
-    </div>`
-    )
-    .join('');
+    .map((t) => taskRow(users, t))
+    .join('') || '<p class="hint-small">No tasks yet.</p>';
 
   document.getElementById('home-bills').innerHTML = upcoming_bills
     .map(
@@ -2247,11 +2332,22 @@ function initActions() {
     }
     if (action === 'toggle-task') {
       const taskId = btn.dataset.taskId;
+      const nowDone = btn.dataset.done !== '1';
+      const inAllTasksModal = btn.closest('#modal-root') && document.querySelector('.wf-modal-header h3')?.textContent === 'All tasks';
       if (taskId) {
-        api(`/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify({ done: true }) })
+        api(`/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify({ done: nowDone }) })
           .then(() => load())
+          .then(() => { if (inAllTasksModal) openAllTasksModal(); })
           .catch((err) => showToast(err.message, true));
       }
+      return;
+    }
+    if (action === 'view-all-tasks') {
+      openAllTasksModal();
+      return;
+    }
+    if (action === 'edit-task') {
+      if (btn.dataset.taskId) openEditTaskModal(btn.dataset.taskId);
       return;
     }
     if (action === 'mark-paid') {

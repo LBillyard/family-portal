@@ -462,6 +462,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "subscription_id" not in bcols:
         conn.execute("ALTER TABLE bills ADD COLUMN subscription_id TEXT")
 
+    taskcols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "remind_at" not in taskcols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN remind_at TEXT")
+    if "reminded_at" not in taskcols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN reminded_at TEXT")
+
     ecols = {r[1] for r in conn.execute("PRAGMA table_info(events)").fetchall()}
     if "google_event_id_written" not in ecols:
         conn.execute("ALTER TABLE events ADD COLUMN google_event_id_written TEXT")
@@ -1149,11 +1155,17 @@ def create_task(data: dict) -> dict:
     now = _utcnow()
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO tasks (id, title, assignee_id, due_date, priority, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (tid, data["title"], data.get("assignee_id"), data.get("due"), data.get("priority", "medium"), now),
+            "INSERT INTO tasks (id, title, assignee_id, due_date, priority, remind_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tid, data["title"], data.get("assignee_id"), data.get("due"), data.get("priority", "medium"), data.get("remind_at"), now),
         )
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
         return _task_out(row_to_dict(row))
+
+
+def get_task(task_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return _task_out(row_to_dict(row)) if row else None
 
 
 def delete_task(task_id: str) -> bool:
@@ -1163,13 +1175,63 @@ def delete_task(task_id: str) -> bool:
 
 
 def update_task(task_id: str, data: dict) -> Optional[dict]:
+    fields = []
+    values = []
+    if "done" in data:
+        fields.append("done = ?")
+        values.append(int(data["done"]))
+    if data.get("title"):
+        fields.append("title = ?")
+        values.append(data["title"])
+    if "assignee_id" in data:
+        fields.append("assignee_id = ?")
+        values.append(data["assignee_id"])
+    if "due" in data:
+        fields.append("due_date = ?")
+        values.append(data["due"])
+    if data.get("priority"):
+        fields.append("priority = ?")
+        values.append(data["priority"])
+    if "remind_at" in data:
+        fields.append("remind_at = ?")
+        values.append(data["remind_at"])
+        # A newly-set (or changed) reminder time should be free to fire again.
+        fields.append("reminded_at = ?")
+        values.append(None)
     with get_conn() as conn:
-        if "done" in data:
-            conn.execute("UPDATE tasks SET done = ? WHERE id = ?", (int(data["done"]), task_id))
-        if data.get("title"):
-            conn.execute("UPDATE tasks SET title = ? WHERE id = ?", (data["title"], task_id))
+        if not conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone():
+            return None
+        if fields:
+            values.append(task_id)
+            conn.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE id = ?", values)
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _task_out(row_to_dict(row)) if row else None
+
+
+def _uk_now_iso() -> str:
+    """Naive Europe/London wall-clock time, matching how remind_at is entered
+    (a plain datetime-local value with no timezone) so string comparison works."""
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("Europe/London")).replace(tzinfo=None, second=0, microsecond=0).isoformat(timespec="minutes")
+
+
+def list_tasks_due_for_reminder() -> list[dict]:
+    """Open tasks whose remind_at has passed and haven't been reminded since."""
+    now = _uk_now_iso()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM tasks
+               WHERE done = 0 AND remind_at IS NOT NULL AND remind_at <= ?
+                 AND (reminded_at IS NULL OR reminded_at < remind_at)""",
+            (now,),
+        ).fetchall()
+        return [_task_out(row_to_dict(r)) for r in rows]
+
+
+def mark_task_reminded(task_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE tasks SET reminded_at = ? WHERE id = ?", (_uk_now_iso(), task_id))
 
 
 def _task_out(r: dict) -> dict:
@@ -1180,6 +1242,8 @@ def _task_out(r: dict) -> dict:
         "due": r["due_date"],
         "done": bool(r["done"]),
         "priority": r["priority"],
+        "remind_at": r.get("remind_at"),
+        "reminded_at": r.get("reminded_at"),
     }
 
 

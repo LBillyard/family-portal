@@ -387,10 +387,10 @@ def _resolve_user(for_user: str | None, default_id: str) -> str:
     return default_id
 
 
-async def notify_task_assignee(task: dict, sender: dict) -> None:
+async def notify_task_assignee(task: dict, sender: dict, verb: str = "added a task for you") -> None:
     """If a task is assigned to the *other* household member, ping them on WhatsApp
-    so both people have visibility. Best-effort: never breaks task creation, and a
-    free-form message only delivers if the assignee has an open 24h window."""
+    so both people have visibility. Best-effort: never breaks task creation/edits, and
+    a free-form message only delivers if the assignee has an open 24h window."""
     assignee_id = task.get("assignee")
     if not assignee_id or assignee_id == sender.get("id"):
         return
@@ -403,13 +403,13 @@ async def notify_task_assignee(task: dict, sender: dict) -> None:
         phone = (assignee or {}).get("phone")
         if not phone:
             return
-        parts = [f"📋 {sender.get('name', 'Someone')} added a task for you: {task['title']}"]
+        parts = [f"📋 {sender.get('name', 'Someone')} {verb}: {task['title']}"]
         if task.get("due"):
             parts.append(f"due {task['due']}")
         if task.get("priority") and task["priority"] != "medium":
             parts.append(f"{task['priority']} priority")
         await whatsapp.send_text(phone, " · ".join(parts))
-        logger.info("Notified %s of task assigned by %s", assignee_id, sender.get("id"))
+        logger.info("Notified %s — %s (by %s)", assignee_id, verb, sender.get("id"))
     except Exception as exc:
         logger.warning("Task-assignee WhatsApp notify failed: %s", exc)
 

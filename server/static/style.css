@@ -2609,6 +2609,19 @@ dialog select:focus {
 .priority-tag.medium { background: var(--amber-bg); color: var(--amber); }
 .priority-tag.low { background: var(--surface-muted); color: var(--text-muted); }
 
+.task-edit-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9375rem;
+  padding: 4px 6px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  align-self: center;
+}
+.task-edit-btn:hover { color: var(--accent); background: var(--surface-muted); }
+
 /* --- Reminders strip --- */
 
 .reminder-strip {

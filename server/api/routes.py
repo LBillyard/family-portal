@@ -991,11 +991,28 @@ async def create_task(body: TaskCreate, user: dict = Depends(require_user)):
 
 
 @router.patch("/tasks/{task_id}")
-def patch_task(task_id: str, body: TaskUpdate, _: dict = Depends(require_user)):
-    task = db.update_task(task_id, body.model_dump(exclude_unset=True))
+async def patch_task(task_id: str, body: TaskUpdate, user: dict = Depends(require_user)):
+    before = db.get_task(task_id)
+    if not before:
+        raise HTTPException(status_code=404, detail="Task not found")
+    patch = body.model_dump(exclude_unset=True, exclude={"notify"})
+    if patch.get("assignee_id") and patch["assignee_id"] not in ("luke", "partner"):
+        name_map = {u["name"].lower(): u["id"] for u in db.list_users()}
+        patch["assignee_id"] = name_map.get(patch["assignee_id"].lower(), patch["assignee_id"])
+    task = db.update_task(task_id, patch)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    reassigned = "assignee_id" in patch and patch["assignee_id"] != before.get("assignee")
+    if reassigned and body.notify:
+        await ai_assistant.notify_task_assignee(task, user, verb="reassigned a task to you")
     return task
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task_route(task_id: str, _: dict = Depends(require_user)):
+    if not db.delete_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"ok": True}
 
 
 @router.get("/documents")
