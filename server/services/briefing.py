@@ -135,6 +135,16 @@ def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -
     diary = [(_hhmm(e["start"]), e["title"]) for e in b["today_events"]]
     diary += [(_hhmm(a["datetime"]), a["title"]) for a in b["today_appointments"]]
     diary.sort(key=lambda x: x[0] or "zz")
+    # Drop duplicates — the same meeting often syncs from more than one calendar.
+    seen: set = set()
+    deduped = []
+    for tm, ti in diary:
+        key = (tm.strip(), (ti or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((tm, ti))
+    diary = deduped
 
     # Outstanding tasks: open tasks, prioritising anything due today or overdue.
     open_tasks = [t for t in db.list_tasks() if not t.get("done")]
