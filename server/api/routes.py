@@ -28,6 +28,8 @@ from shared.schemas import (
     AppointmentUpdate,
     AssistantChatRequest,
     BillCreate,
+    BillLock,
+    BillUpdate,
     ChangePasswordRequest,
     TransactionCategoryUpdate,
     DocumentCreate,
@@ -399,6 +401,7 @@ async def banking_sync(_: dict = Depends(require_user)):
         except Exception as exc:
             results.append({"provider": conn["provider_name"], "error": str(exc)})
     sub_svc.refresh_subscriptions()
+    db.reconcile_locked_bills()  # a new bank payment may auto-clear a locked bill
     return {"synced": results, "banking_last": db.get_setting("banking_last_sync", "just now")}
 
 
@@ -414,6 +417,7 @@ def banking_disconnect(connection_id: str, _: dict = Depends(require_user)):
 
 @router.get("/dashboard")
 def api_dashboard(_: dict = Depends(require_user)):
+    db.reconcile_locked_bills()  # keep "Bills due soon" in sync with locked-bill payments
     return dash.build_dashboard()
 
 
@@ -451,6 +455,8 @@ def create_event(body: EventCreate, user: dict = Depends(require_user)):
 
 @router.get("/finances")
 def api_finances(_: dict = Depends(require_user)):
+    merged = finance_merge.build_merged_recurring()  # links matched bills → subscriptions
+    db.reconcile_locked_bills()  # auto-mark locked bills paid/unpaid from bank payments
     return {
         "bills": db.list_bills(),
         "transactions": db.list_transactions(),
@@ -460,7 +466,7 @@ def api_finances(_: dict = Depends(require_user)):
         "summary": db.finance_summary(),
         "connections": db.list_bank_connections(),
         "banking_configured": open_banking.is_configured(),
-        "merged_recurring": finance_merge.build_merged_recurring(),
+        "merged_recurring": merged,
         "category_breakdown": db.category_breakdown(),
         "categories": cz.CATEGORIES,
     }
@@ -525,9 +531,42 @@ def create_bill(body: BillCreate, _: dict = Depends(require_user)):
     return db.create_bill(body.model_dump())
 
 
+@router.patch("/bills/{bill_id}")
+def update_bill_route(bill_id: str, body: BillUpdate, _: dict = Depends(require_user)):
+    bill = db.update_bill(bill_id, body.model_dump(exclude_unset=True))
+    if not bill:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    return bill
+
+
+@router.delete("/bills/{bill_id}")
+def delete_bill_route(bill_id: str, _: dict = Depends(require_user)):
+    if not db.delete_bill(bill_id):
+        raise HTTPException(status_code=404, detail="Bill not found")
+    return {"ok": True}
+
+
 @router.post("/bills/{bill_id}/pay")
 def pay_bill(bill_id: str, _: dict = Depends(require_user)):
     bill = db.mark_bill_paid(bill_id)
+    if not bill:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    return bill
+
+
+@router.post("/bills/{bill_id}/lock")
+def lock_bill(bill_id: str, body: BillLock, _: dict = Depends(require_user)):
+    """Lock a bill to a detected bank payment (subscription) so it auto-marks paid."""
+    bill = db.set_bill_lock(bill_id, body.subscription_id, locked=True)
+    if not bill:
+        raise HTTPException(status_code=404, detail="Bill not found")
+    db.reconcile_locked_bills()
+    return db.get_bill(bill_id)
+
+
+@router.post("/bills/{bill_id}/unlock")
+def unlock_bill(bill_id: str, _: dict = Depends(require_user)):
+    bill = db.set_bill_lock(bill_id, locked=False)
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
     return bill

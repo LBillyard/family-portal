@@ -2622,6 +2622,45 @@ dialog select:focus {
 }
 .task-edit-btn:hover { color: var(--accent); background: var(--surface-muted); }
 
+/* ---- Inline row editing (tasks + bills) ---- */
+.bill-row-actions { display: flex; align-items: center; gap: 8px; }
+.bill-edit-btn, .bill-lock-btn {
+  background: none; border: none; cursor: pointer; font-size: 0.9375rem;
+  color: var(--text-muted); padding: 4px 6px; border-radius: 6px; flex-shrink: 0;
+}
+.bill-edit-btn:hover, .bill-lock-btn:hover { color: var(--accent); background: var(--surface-muted); }
+.bill-auto { color: var(--accent); font-weight: 600; }
+
+.task-item.editing, .list-item.editing {
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--surface-muted);
+  border-radius: 8px;
+  padding: 12px;
+}
+.row-edit { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.row-edit .te-input {
+  padding: 8px 10px; font-size: 0.9375rem; font-weight: 600; font-family: var(--font);
+  border: 1px solid var(--border); border-radius: 6px; width: 100%;
+}
+.row-edit-fields { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.row-edit-fields label {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 0.625rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted);
+}
+.row-edit-fields input, .row-edit-fields select {
+  padding: 6px 8px; font-size: 0.8125rem; font-family: var(--font);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.row-edit-fields .row-edit-check {
+  flex-direction: row; align-items: center; gap: 6px;
+  text-transform: none; letter-spacing: 0; font-weight: 500;
+  font-size: 0.75rem; color: var(--text-secondary); align-self: center;
+}
+.row-edit-fields .row-edit-check input { width: auto; }
+.row-edit-actions { display: flex; gap: 6px; align-items: center; }
+
 /* --- Reminders strip --- */
 
 .reminder-strip {

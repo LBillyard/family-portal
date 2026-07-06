@@ -360,27 +360,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )"""
     )
 
-    netflix_count = conn.execute(
-        "SELECT COUNT(*) AS c FROM transactions WHERE description LIKE '%NETFLIX%'"
-    ).fetchone()["c"]
-    account_ids = [r[0] for r in conn.execute("SELECT id FROM accounts ORDER BY id").fetchall()]
-    if netflix_count == 0 and account_ids:
-        now = _utcnow()
-        recurring = [
-            ("NETFLIX.COM", "Subscriptions", -17.99),
-            ("SPOTIFY PREMIUM", "Subscriptions", -10.99),
-            ("DISNEY PLUS", "Subscriptions", -7.99),
-            ("AMAZON PRIME", "Subscriptions", -8.99),
-        ]
-        for month in range(1, 7):
-            pay = f"2026-{month:02d}-15"
-            for i, (desc, cat, amt) in enumerate(recurring):
-                acct = account_ids[i % len(account_ids)]
-                conn.execute(
-                    "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (_new_id(), acct, desc, cat, amt, pay, now),
-                )
-
     conn.execute(
         """CREATE TABLE IF NOT EXISTS maintenance_items (
             id TEXT PRIMARY KEY,
@@ -461,6 +440,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     bcols = {r[1] for r in conn.execute("PRAGMA table_info(bills)").fetchall()}
     if "subscription_id" not in bcols:
         conn.execute("ALTER TABLE bills ADD COLUMN subscription_id TEXT")
+    if "locked" not in bcols:
+        conn.execute("ALTER TABLE bills ADD COLUMN locked INTEGER NOT NULL DEFAULT 0")
 
     taskcols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
     if "remind_at" not in taskcols:
@@ -495,29 +476,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "phone" not in ucols:
         conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
 
-    maint_count = conn.execute("SELECT COUNT(*) AS c FROM maintenance_items").fetchone()["c"]
-    if maint_count == 0:
-        now = _utcnow()
-        seed_maint = [
-            ("Boiler service", "heating", "2025-09-01", "2026-09-01", 12, "British Gas", "Annual service"),
-            ("Gutter clearing", "exterior", "2025-11-01", "2026-11-01", 12, "Local roofer", ""),
-            ("Washing machine warranty", "appliance", "", "2027-03-01", 0, "Currys", "Extended warranty"),
-        ]
-        for title, cat, last_d, next_d, interval, vendor, notes in seed_maint:
-            conn.execute(
-                """INSERT INTO maintenance_items
-                   (id, title, category, last_service_date, next_due_date, interval_months, vendor, notes, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (_new_id(), title, cat, last_d, next_d, interval, vendor, notes, now),
-            )
-
 
 def _seed(conn: sqlite3.Connection) -> None:
+    """Seed ONLY the two real household accounts. No demo/sample content —
+    the household adds their own bills, tasks, trips, etc."""
     from server.auth import hash_password
 
     users = [
-        ("luke", "lbillyard@gmail.com", "Luke", "#00a89e"),
-        ("partner", "lebillyard@gmail.com", "Laura", "#243a5e"),
+        ("luke", "lbillyard@gmail.com", "Luke", "#2563eb"),
+        ("partner", "lebillyard@gmail.com", "Laura", "#db2777"),
     ]
     pw = hash_password("family123")
     now = _utcnow()
@@ -526,155 +493,6 @@ def _seed(conn: sqlite3.Connection) -> None:
             "INSERT INTO users (id, email, name, password_hash, colour, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (uid, email, name, pw, colour, now),
         )
-
-    accounts = [
-        ("starling", "Starling", "current", 0, "Starling Bank"),
-        ("revolut", "Revolut", "current", 0, "Revolut"),
-        ("amex", "American Express", "credit", 0, "American Express"),
-        ("virgin_cc", "Virgin credit card", "credit", 0, "Virgin Money"),
-    ]
-    for aid, name, typ, bal, inst in accounts:
-        conn.execute(
-            "INSERT INTO accounts (id, name, type, balance, institution) VALUES (?, ?, ?, ?, ?)",
-            (aid, name, typ, bal, inst),
-        )
-
-    for cat, limit in [("Groceries", 400), ("Eating out", 150), ("Transport", 200), ("Entertainment", 80), ("Shopping", 120)]:
-        conn.execute("INSERT INTO budgets (id, category, monthly_limit) VALUES (?, ?, ?)", (_new_id(), cat, limit))
-
-    for name, target, current, colour in [("Holiday fund", 3000, 2100, "#00a89e"), ("Emergency buffer", 10000, 7850, "#243a5e")]:
-        conn.execute(
-            "INSERT INTO savings_goals (id, name, target, current, colour) VALUES (?, ?, ?, ?, ?)",
-            (_new_id(), name, target, current, colour),
-        )
-
-    bills = [
-        ("Mortgage", 1245.0, 1, "Housing", 1),
-        ("Council tax", 186.0, 15, "Housing", 0),
-        ("Energy (Octopus)", 142.5, 22, "Utilities", 0),
-        ("Netflix", 17.99, 28, "Subscriptions", 0),
-        ("Car insurance", 48.0, 5, "Transport", 1),
-        ("Broadband", 34.99, 18, "Utilities", 0),
-    ]
-    for name, amt, day, cat, paid in bills:
-        conn.execute(
-            "INSERT INTO bills (id, name, amount, due_day, category, paid) VALUES (?, ?, ?, ?, ?, ?)",
-            (_new_id(), name, amt, day, cat, paid),
-        )
-
-    txns = [
-        ("starling", "Weekly shop — Tesco", "Groceries", -87.42, "2026-07-03"),
-        ("revolut", "Salary", "Income", 3200.0, "2026-07-02"),
-        ("starling", "Petrol", "Transport", -54.2, "2026-07-01"),
-        ("amex", "Restaurant", "Eating out", -62.0, "2026-06-30"),
-        ("revolut", "Transfer in", "Income", 2800.0, "2026-06-28"),
-    ]
-    for acct, desc, cat, amt, d in txns:
-        conn.execute(
-            "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (_new_id(), acct, desc, cat, amt, d, now),
-        )
-
-    recurring = [
-        ("starling", "NETFLIX.COM", "Subscriptions", -17.99),
-        ("starling", "SPOTIFY PREMIUM", "Subscriptions", -10.99),
-        ("amex", "DISNEY PLUS", "Subscriptions", -7.99),
-        ("revolut", "AMAZON PRIME", "Subscriptions", -8.99),
-        ("starling", "OCTOPUS ENERGY", "Utilities", -142.50),
-    ]
-    for month in range(1, 7):
-        pay = f"2026-{month:02d}-15"
-        for acct, desc, cat, amt in recurring:
-            conn.execute(
-                "INSERT INTO transactions (id, account_id, description, category, amount, txn_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (_new_id(), acct, desc, cat, amt, pay, now),
-            )
-
-    tasks = [
-        ("Book Portugal airport parking", "luke", "2026-07-10", 0, "high"),
-        ("Renew home insurance quote", "partner", "2026-07-20", 0, "medium"),
-        ("Sort summer wardrobe", "partner", "2026-07-15", 1, "low"),
-        ("Pay council tax", "luke", "2026-07-15", 0, "high"),
-    ]
-    for title, assignee, due, done, pri in tasks:
-        conn.execute(
-            "INSERT INTO tasks (id, title, assignee_id, due_date, done, priority, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (_new_id(), title, assignee, due, done, pri, now),
-        )
-
-    events = [
-        ("luke", "Team standup", "2026-07-07T09:00:00", "2026-07-07T09:30:00", 0, "google", "Zoom"),
-        ("partner", "Dentist — 6-month check", "2026-07-08T14:00:00", "2026-07-08T15:00:00", 0, "portal", "Smile Dental"),
-        ("luke", "Date night", "2026-07-11T19:00:00", "2026-07-11T23:00:00", 0, "portal", "The Ivy"),
-        ("luke", "Portugal holiday", "2026-08-15", "2026-08-22", 1, "portal", "Algarve"),
-        ("partner", "Gym", "2026-07-07T18:00:00", "2026-07-07T19:00:00", 0, "google", "PureGym"),
-    ]
-    for uid, title, start, end, all_day, source, loc in events:
-        conn.execute(
-            """INSERT INTO events (id, user_id, title, start_at, end_at, all_day, source, location, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (_new_id(), uid, title, start, end, all_day, source, loc, now),
-        )
-
-    appts = [
-        ("luke", "GP — prescription review", "Oakwood Medical Centre", "2026-07-14T10:30:00", "health", "12 Oak Lane", 2),
-        ("partner", "Dentist — check-up", "Smile Dental", "2026-07-08T14:00:00", "dental", "High Street", 1),
-        ("luke", "Car MOT", "Kwik Fit", "2026-07-25T08:30:00", "car", "Retail Park", 7),
-    ]
-    for uid, title, prov, dt, cat, loc, rem in appts:
-        conn.execute(
-            """INSERT INTO appointments (id, user_id, title, provider, datetime, category, location, reminder_days, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (_new_id(), uid, title, prov, dt, cat, loc, rem, now),
-        )
-
-    trip_id = _new_id()
-    conn.execute(
-        "INSERT INTO holiday_trips (id, title, status, start_date, end_date, budget, spent) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (trip_id, "Algarve, Portugal", "booked", "2026-08-15", "2026-08-22", 2400, 1850),
-    )
-    for i, (label, done) in enumerate([
-        ("Flights booked", 1), ("Hotel confirmed", 1), ("Travel insurance", 1),
-        ("Airport parking", 0), ("Pack sun cream", 0),
-    ]):
-        conn.execute(
-            "INSERT INTO holiday_checklist (id, trip_id, label, done, sort_order) VALUES (?, ?, ?, ?, ?)",
-            (_new_id(), trip_id, label, done, i),
-        )
-
-    conn.execute(
-        "INSERT INTO holiday_trips (id, title, status, budget, spent) VALUES (?, ?, ?, ?, ?)",
-        (_new_id(), "City break — Prague?", "idea", 800, 0),
-    )
-    conn.execute(
-        "INSERT INTO holiday_trips (id, title, status, start_date, end_date, budget, spent) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (_new_id(), "Lake District weekend", "planning", "2026-09-12", "2026-09-14", 450, 120),
-    )
-
-    ideas = [
-        ("Santorini, Greece", "7 nights, boutique hotel, flights from £680pp.", 2200, 1, '["Beach","Romantic"]'),
-        ("Edinburgh Fringe weekend", "Train from home, central Airbnb, 3 days of shows.", 550, 0, '["City","Culture"]'),
-    ]
-    for dest, summary, est, saved, tags in ideas:
-        conn.execute(
-            "INSERT INTO holiday_ideas (id, destination, summary, budget_estimate, saved, tags_json) VALUES (?, ?, ?, ?, ?, ?)",
-            (_new_id(), dest, summary, est, saved, tags),
-        )
-
-    docs = [
-        ("Luke passport", "passport", "2027-03-14", "ok", ""),
-        ("Partner passport", "passport", "2026-11-02", "renew_soon", ""),
-        ("Home insurance", "insurance", "2026-08-01", "renew_soon", "Buildings & contents"),
-        ("Car MOT certificate", "mot", "2027-01-25", "ok", ""),
-    ]
-    for name, category, expiry, status, notes in docs:
-        conn.execute(
-            """INSERT INTO documents (id, name, category, expiry, status, notes, file_size)
-               VALUES (?, ?, ?, ?, ?, ?, 0)""",
-            (_new_id(), name, category, expiry, status, notes),
-        )
-
-    conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("google_last_sync", "3 min ago"))
 
 
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -827,8 +645,23 @@ def _event_out(r: dict) -> dict:
 
 def list_bills() -> list[dict]:
     with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM bills ORDER BY due_day").fetchall()
+        rows = conn.execute(
+            """SELECT b.*, s.display_name AS locked_to_name, s.last_charge_date AS last_charge_date
+               FROM bills b LEFT JOIN subscriptions s ON s.id = b.subscription_id
+               ORDER BY b.due_day"""
+        ).fetchall()
         return [_bill_out(row_to_dict(r)) for r in rows]
+
+
+def get_bill(bill_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT b.*, s.display_name AS locked_to_name, s.last_charge_date AS last_charge_date
+               FROM bills b LEFT JOIN subscriptions s ON s.id = b.subscription_id
+               WHERE b.id = ?""",
+            (bill_id,),
+        ).fetchone()
+        return _bill_out(row_to_dict(row)) if row else None
 
 
 def create_bill(data: dict) -> dict:
@@ -842,17 +675,85 @@ def create_bill(data: dict) -> dict:
         return _bill_out(row_to_dict(row))
 
 
+def update_bill(bill_id: str, data: dict) -> Optional[dict]:
+    mapping = {"name": "name", "amount": "amount", "due_day": "due_day", "recurrence": "recurrence", "category": "category"}
+    fields, values = [], []
+    for key, col in mapping.items():
+        if data.get(key) is not None:
+            fields.append(f"{col} = ?")
+            values.append(data[key])
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM bills WHERE id = ?", (bill_id,)).fetchone():
+            return None
+        if fields:
+            values.append(bill_id)
+            conn.execute(f"UPDATE bills SET {', '.join(fields)} WHERE id = ?", values)
+    return get_bill(bill_id)
+
+
 def mark_bill_paid(bill_id: str) -> Optional[dict]:
     with get_conn() as conn:
         conn.execute("UPDATE bills SET paid = 1, paid_at = ? WHERE id = ?", (_utcnow(), bill_id))
-        row = conn.execute("SELECT * FROM bills WHERE id = ?", (bill_id,)).fetchone()
-        return _bill_out(row_to_dict(row)) if row else None
+        if not conn.execute("SELECT id FROM bills WHERE id = ?", (bill_id,)).fetchone():
+            return None
+    return get_bill(bill_id)
 
 
 def delete_bill(bill_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM bills WHERE id = ?", (bill_id,))
         return cur.rowcount > 0
+
+
+def set_bill_lock(bill_id: str, subscription_id: str | None = None, locked: bool = True) -> Optional[dict]:
+    """Lock/unlock a bill to a detected bank subscription. When locked, the bill's
+    paid state is auto-managed by reconcile_locked_bills()."""
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM bills WHERE id = ?", (bill_id,)).fetchone():
+            return None
+        if locked:
+            conn.execute(
+                "UPDATE bills SET locked = 1, subscription_id = COALESCE(?, subscription_id) WHERE id = ?",
+                (subscription_id, bill_id),
+            )
+        else:
+            conn.execute("UPDATE bills SET locked = 0 WHERE id = ?", (bill_id,))
+    return get_bill(bill_id)
+
+
+def _lock_period_start(recurrence: str) -> str:
+    """The earliest charge date that counts as 'paid this period' for a locked bill."""
+    today = date.today()
+    if recurrence == "yearly":
+        return (today - timedelta(days=365)).isoformat()
+    if recurrence == "quarterly":
+        return (today - timedelta(days=92)).isoformat()
+    if recurrence == "weekly":
+        return (today - timedelta(days=7)).isoformat()
+    return today.replace(day=1).isoformat()  # monthly (default): this calendar month
+
+
+def reconcile_locked_bills() -> int:
+    """For each locked bill linked to a subscription, auto-set paid based on whether
+    the matched bank payment landed in the current billing period. Returns rows changed."""
+    changed = 0
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT b.id, b.paid, b.recurrence, s.last_charge_date
+               FROM bills b JOIN subscriptions s ON s.id = b.subscription_id
+               WHERE b.locked = 1"""
+        ).fetchall()
+        for r in rows:
+            since = _lock_period_start(r["recurrence"] or "monthly")
+            charged = bool(r["last_charge_date"] and str(r["last_charge_date"])[:10] >= since)
+            want_paid = 1 if charged else 0
+            if int(bool(r["paid"])) != want_paid:
+                if want_paid:
+                    conn.execute("UPDATE bills SET paid = 1, paid_at = ? WHERE id = ?", (r["last_charge_date"], r["id"]))
+                else:
+                    conn.execute("UPDATE bills SET paid = 0, paid_at = NULL WHERE id = ?", (r["id"],))
+                changed += 1
+    return changed
 
 
 def _bill_out(r: dict) -> dict:
@@ -865,6 +766,9 @@ def _bill_out(r: dict) -> dict:
         "category": r["category"],
         "paid": bool(r["paid"]),
         "subscription_id": r.get("subscription_id"),
+        "locked": bool(r.get("locked")),
+        "locked_to_name": r.get("locked_to_name"),
+        "last_charge_date": r.get("last_charge_date"),
     }
 
 

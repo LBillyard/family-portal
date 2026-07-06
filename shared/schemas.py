@@ -54,6 +54,18 @@ class BillCreate(BaseModel):
     category: str = "Other"
 
 
+class BillUpdate(BaseModel):
+    name: Optional[str] = None
+    amount: Optional[float] = None
+    due_day: Optional[int] = Field(default=None, ge=1, le=31)
+    recurrence: Optional[str] = None
+    category: Optional[str] = None
+
+
+class BillLock(BaseModel):
+    subscription_id: Optional[str] = None
+
+
 class TransactionCreate(BaseModel):
     description: str
     amount: float

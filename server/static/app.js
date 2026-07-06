@@ -900,10 +900,9 @@ function renderReminders(reminders) {
     .join('');
 }
 
-function taskRow(users, t) {
+function taskRowInner(users, t) {
   const remindLabel = t.remind_at ? `⏰ ${fmt.datetime(t.remind_at)}` : '';
   return `
-    <div class="task-item${t.done ? ' done' : ''}">
       <div class="task-check${t.done ? ' done' : ''} wf-action" data-action="toggle-task" data-task-id="${t.id}" data-done="${t.done ? '1' : '0'}"></div>
       <div class="task-body">
         <div class="task-title">${esc(t.title)}</div>
@@ -914,7 +913,32 @@ function taskRow(users, t) {
           <span class="priority-tag ${t.priority}">${t.priority}</span>
         </div>
       </div>
-      <button class="task-edit-btn wf-action" data-action="edit-task" data-task-id="${t.id}" title="Edit task" aria-label="Edit task">✎</button>
+      <button class="task-edit-btn wf-action" data-action="edit-task" data-task-id="${t.id}" title="Edit task" aria-label="Edit task">✎</button>`;
+}
+
+function taskRow(users, t) {
+  return `<div class="task-item${t.done ? ' done' : ''}" data-task-id="${t.id}">${taskRowInner(users, t)}</div>`;
+}
+
+// Inline edit form that replaces a task row's contents in place (no modal).
+function taskEditInner(users, t) {
+  const userOpts = users.map((u) => `<option value="${u.id}"${u.id === t.assignee ? ' selected' : ''}>${esc(u.name)}</option>`).join('');
+  const priOpts = ['high', 'medium', 'low'].map((p) => `<option value="${p}"${p === t.priority ? ' selected' : ''}>${p}</option>`).join('');
+  return `
+    <div class="row-edit" data-task-id="${t.id}">
+      <input type="text" class="te-input" data-f="title" value="${esc(t.title)}" placeholder="Task">
+      <div class="row-edit-fields">
+        <label>Owner<select data-f="assignee">${userOpts}</select></label>
+        <label>Priority<select data-f="priority">${priOpts}</select></label>
+        <label>Complete by<input type="date" data-f="due" value="${esc(t.due || '')}"></label>
+        <label>Remind me<input type="datetime-local" data-f="remind_at" value="${esc((t.remind_at || '').slice(0, 16))}"></label>
+        <label class="row-edit-check"><input type="checkbox" data-f="notify" checked> Notify owner on WhatsApp if reassigned</label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-task-inline" data-task-id="${t.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-task-inline" data-task-id="${t.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-task-inline" data-task-id="${t.id}" style="margin-left:auto">Delete</button>
+      </div>
     </div>`;
 }
 
@@ -935,65 +959,65 @@ function openAllTasksModal() {
   document.getElementById('modal-backdrop').onclick = closeModal;
 }
 
-function openEditTaskModal(taskId) {
-  const users = store.dashboard?.users || [];
-  const tasks = store.dashboard?.tasks || [];
-  const t = tasks.find((x) => String(x.id) === String(taskId));
-  if (!t) return showToast('Task not found', true);
-  const userOpts = users.map((u) => `<option value="${u.id}"${u.id === t.assignee ? ' selected' : ''}>${esc(u.name)}</option>`).join('');
-  const priOpts = ['high', 'medium', 'low'].map((p) => `<option value="${p}"${p === t.priority ? ' selected' : ''}>${p}</option>`).join('');
-  document.getElementById('modal-root').innerHTML = `
-    <div class="modal-backdrop" id="modal-backdrop"></div>
-    <div class="wf-modal" role="dialog">
-      <div class="wf-modal-header"><h3>Edit task</h3><p>Reassign, reschedule, or set a reminder.</p></div>
-      <div class="wf-modal-body">
-        <label class="field field-full"><span>Task</span><input type="text" id="et-title" value="${esc(t.title)}"></label>
-        <label class="field"><span>Owner</span><select id="et-assignee">${userOpts}</select></label>
-        <label class="field"><span>Priority</span><select id="et-priority">${priOpts}</select></label>
-        <label class="field"><span>Complete by</span><input type="date" id="et-due" value="${esc(t.due || '')}"></label>
-        <label class="field"><span>Remind me</span><input type="datetime-local" id="et-remind" value="${esc((t.remind_at || '').slice(0, 16))}"></label>
-        <label class="field field-full" style="flex-direction:row;align-items:center;gap:8px">
-          <input type="checkbox" id="et-notify" checked style="width:auto"><span>Notify the owner on WhatsApp if reassigned</span>
-        </label>
+// Read the values out of an inline row-edit form (task or bill).
+function readInlineFields(root) {
+  const data = {};
+  root.querySelectorAll('[data-f]').forEach((el) => {
+    data[el.dataset.f] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  return data;
+}
+
+const BILL_CATEGORIES = ['Housing', 'Utilities', 'Subscriptions', 'Transport', 'Insurance', 'Groceries', 'Health', 'Other'];
+
+function findBill(id) {
+  return (store.finances?.bills || []).find((b) => String(b.id) === String(id))
+    || (store.dashboard?.upcoming_bills || []).find((b) => String(b.id) === String(id));
+}
+
+function billRowInner(b) {
+  const lockBtn = b.subscription_id
+    ? `<button class="bill-lock-btn wf-action" data-action="${b.locked ? 'unlock-bill' : 'lock-bill'}" data-bill-id="${b.id}" data-sub-id="${esc(b.subscription_id)}" title="${b.locked ? 'Unlock from bank payment' : 'Lock to bank payment (auto-marks paid)'}">${b.locked ? '🔒' : '🔓'}</button>`
+    : '';
+  let status = '';
+  if (b.paid && b.locked) status = ` · <span class="bill-auto">🔒 Auto-paid${b.locked_to_name ? ` · ${esc(b.locked_to_name)}` : ''}</span>`;
+  else if (b.paid) status = ' · ✓ Paid';
+  else if (b.locked) status = ` · <span class="bill-auto">🔒 Locked${b.locked_to_name ? ` · ${esc(b.locked_to_name)}` : ''}</span>`;
+  return `
+    <div class="list-item-body">
+      <div class="list-item-title">${esc(b.name)}</div>
+      <div class="list-item-meta">Day ${b.due_day} · ${esc(b.category)}${status}</div>
+    </div>
+    <div class="bill-row-actions">
+      <div class="list-item-amount negative">${fmt.gbp(b.amount)}</div>
+      ${!b.paid && !b.locked ? `<button class="btn btn-sm btn-soft wf-action" data-action="mark-paid" data-bill-id="${b.id}">Pay</button>` : ''}
+      ${lockBtn}
+      <button class="bill-edit-btn wf-action" data-action="edit-bill" data-bill-id="${b.id}" title="Edit bill" aria-label="Edit bill">✎</button>
+    </div>`;
+}
+
+function billRow(b) {
+  return `<div class="list-item${b.paid ? ' bill-paid' : ''}" data-bill-id="${b.id}">${billRowInner(b)}</div>`;
+}
+
+function billEditInner(b) {
+  const catOpts = BILL_CATEGORIES.map((c) => `<option${c === b.category ? ' selected' : ''}>${c}</option>`).join('');
+  const recOpts = ['monthly', 'quarterly', 'yearly', 'weekly'].map((r) => `<option value="${r}"${r === (b.recurrence || 'monthly') ? ' selected' : ''}>${r}</option>`).join('');
+  return `
+    <div class="row-edit" data-bill-id="${b.id}">
+      <input type="text" class="te-input" data-f="name" value="${esc(b.name)}" placeholder="Bill name">
+      <div class="row-edit-fields">
+        <label>Amount £<input type="number" step="0.01" min="0" data-f="amount" value="${b.amount}"></label>
+        <label>Due day<input type="number" min="1" max="31" data-f="due_day" value="${b.due_day}"></label>
+        <label>Category<select data-f="category">${catOpts}</select></label>
+        <label>Recurrence<select data-f="recurrence">${recOpts}</select></label>
       </div>
-      <div class="wf-modal-footer">
-        <button type="button" class="btn btn-ghost" id="et-delete" style="margin-right:auto">Delete</button>
-        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
-        <button type="button" class="btn btn-primary" id="et-save">Save</button>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-bill-inline" data-bill-id="${b.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-bill-inline" data-bill-id="${b.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-bill-inline" data-bill-id="${b.id}" style="margin-left:auto">Delete</button>
       </div>
     </div>`;
-  document.getElementById('modal-backdrop').onclick = closeModal;
-  document.getElementById('et-save').onclick = async () => {
-    try {
-      await api(`/tasks/${taskId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          title: document.getElementById('et-title').value.trim(),
-          assignee_id: document.getElementById('et-assignee').value,
-          priority: document.getElementById('et-priority').value,
-          due: document.getElementById('et-due').value || null,
-          remind_at: document.getElementById('et-remind').value || null,
-          notify: document.getElementById('et-notify').checked,
-        }),
-      });
-      closeModal();
-      showToast('Task updated');
-      await load();
-    } catch (err) {
-      showToast(err.message, true);
-    }
-  };
-  document.getElementById('et-delete').onclick = async () => {
-    if (!confirm('Delete this task?')) return;
-    try {
-      await api(`/tasks/${taskId}`, { method: 'DELETE' });
-      closeModal();
-      showToast('Task deleted');
-      await load();
-    } catch (err) {
-      showToast(err.message, true);
-    }
-  };
 }
 
 function renderHome(data) {
@@ -1027,17 +1051,8 @@ function renderHome(data) {
     .join('') || '<p class="hint-small">No tasks yet.</p>';
 
   document.getElementById('home-bills').innerHTML = upcoming_bills
-    .map(
-      (b) => `
-    <div class="list-item">
-      <div class="list-item-body">
-        <div class="list-item-title">${esc(b.name)}</div>
-        <div class="list-item-meta">Due ${b.due_day} ${esc(b.recurrence)} · ${esc(b.category)}</div>
-      </div>
-      <div class="list-item-amount negative">${fmt.gbp(b.amount)}</div>
-    </div>`
-    )
-    .join('');
+    .map((b) => billRow(b))
+    .join('') || '<p class="hint-small">Nothing due — add a bill in Finances.</p>';
 
   document.getElementById('home-appointments').innerHTML = upcoming_appointments
     .map(
@@ -1285,20 +1300,8 @@ function renderFinances(data) {
     .join('') + '<button class="acct-btn acct-hidden-link wf-action" data-action="show-hidden-accounts">Hidden…</button>';
 
   document.getElementById('finance-bills').innerHTML = bills
-    .map(
-      (b) => `
-    <div class="list-item${b.paid ? ' bill-paid' : ''}">
-      <div class="list-item-body">
-        <div class="list-item-title">${esc(b.name)}</div>
-        <div class="list-item-meta">Day ${b.due_day} · ${esc(b.category)}${b.paid ? ' · ✓ Paid' : ''}</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <div class="list-item-amount negative">${fmt.gbp(b.amount)}</div>
-        ${!b.paid ? `<button class="btn btn-sm btn-soft wf-action" data-action="mark-paid" data-bill-id="${b.id}">Pay</button>` : ''}
-      </div>
-    </div>`
-    )
-    .join('');
+    .map((b) => billRow(b))
+    .join('') || '<p class="hint-small">No bills yet — add one above.</p>';
 
   document.getElementById('finance-budgets').innerHTML = budgets
     .map((b) => {
@@ -2347,7 +2350,42 @@ function initActions() {
       return;
     }
     if (action === 'edit-task') {
-      if (btn.dataset.taskId) openEditTaskModal(btn.dataset.taskId);
+      const row = btn.closest('.task-item');
+      const t = (store.dashboard?.tasks || []).find((x) => String(x.id) === String(btn.dataset.taskId));
+      if (row && t) {
+        row.classList.add('editing');
+        row.innerHTML = taskEditInner(store.dashboard.users, t);
+        row.querySelector('[data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-task-inline') {
+      const row = btn.closest('.task-item');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Task needs a title', true); return; }
+      const inModal = !!btn.closest('#modal-root');
+      api(`/tasks/${btn.dataset.taskId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: f.title.trim(), assignee_id: f.assignee, priority: f.priority,
+          due: f.due || null, remind_at: f.remind_at || null, notify: !!f.notify,
+        }),
+      }).then(() => load()).then(() => { if (inModal) openAllTasksModal(); showToast('Task updated'); })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-task-inline') {
+      const row = btn.closest('.task-item');
+      const t = (store.dashboard?.tasks || []).find((x) => String(x.id) === String(btn.dataset.taskId));
+      if (row && t) { row.className = `task-item${t.done ? ' done' : ''}`; row.innerHTML = taskRowInner(store.dashboard.users, t); }
+      return;
+    }
+    if (action === 'delete-task-inline') {
+      if (!confirm('Delete this task?')) return;
+      const inModal = !!btn.closest('#modal-root');
+      api(`/tasks/${btn.dataset.taskId}`, { method: 'DELETE' })
+        .then(() => load()).then(() => { if (inModal) openAllTasksModal(); showToast('Task deleted'); })
+        .catch((err) => showToast(err.message, true));
       return;
     }
     if (action === 'mark-paid') {
@@ -2357,6 +2395,51 @@ function initActions() {
           .then(() => load())
           .catch((err) => showToast(err.message, true));
       }
+      return;
+    }
+    if (action === 'edit-bill') {
+      const row = btn.closest('.list-item');
+      const b = findBill(btn.dataset.billId);
+      if (row && b) { row.classList.add('editing'); row.innerHTML = billEditInner(b); row.querySelector('[data-f="name"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-bill-inline') {
+      const row = btn.closest('.list-item');
+      const f = readInlineFields(row);
+      if (!f.name || !f.name.trim()) { showToast('Bill needs a name', true); return; }
+      api(`/bills/${btn.dataset.billId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: f.name.trim(), amount: parseFloat(f.amount) || 0,
+          due_day: parseInt(f.due_day, 10) || 1, category: f.category, recurrence: f.recurrence,
+        }),
+      }).then(() => load()).then(() => showToast('Bill updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-bill-inline') {
+      const row = btn.closest('.list-item');
+      const b = findBill(btn.dataset.billId);
+      if (row && b) { row.className = `list-item${b.paid ? ' bill-paid' : ''}`; row.innerHTML = billRowInner(b); }
+      return;
+    }
+    if (action === 'delete-bill-inline') {
+      if (!confirm('Delete this bill?')) return;
+      api(`/bills/${btn.dataset.billId}`, { method: 'DELETE' })
+        .then(() => load()).then(() => showToast('Bill deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'lock-bill') {
+      api(`/bills/${btn.dataset.billId}/lock`, { method: 'POST', body: JSON.stringify({ subscription_id: btn.dataset.subId || null }) })
+        .then(() => load()).then(() => showToast('Locked — auto-marks paid when the bank payment lands'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'unlock-bill') {
+      api(`/bills/${btn.dataset.billId}/unlock`, { method: 'POST' })
+        .then(() => load()).then(() => showToast('Unlocked'))
+        .catch((err) => showToast(err.message, true));
       return;
     }
     if (action === 'view-trip') {
