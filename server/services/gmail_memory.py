@@ -71,7 +71,12 @@ def _body_text(payload: dict) -> str:
             walk(sub)
 
     walk(payload)
-    text = "\n".join(plain) or re.sub(r"<[^>]+>", " ", "\n".join(html))
+    text = "\n".join(plain)
+    if not text.strip():
+        # HTML-only email: drop <style>/<script>/<head> (CSS/JS) BEFORE stripping tags,
+        # otherwise stylesheet junk leaks into the text the AI reads.
+        raw = re.sub(r"(?is)<(style|script|head)\b[^>]*>.*?</\1>", " ", "\n".join(html))
+        text = re.sub(r"<[^>]+>", " ", raw)
     return re.sub(r"\s+", " ", text).strip()
 
 
