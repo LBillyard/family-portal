@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-DB_PATH = Path(__file__).parent.parent / "data" / "family.db"
+DB_PATH = Path(os.environ.get("FAMILY_PORTAL_DB") or (Path(__file__).parent.parent / "data" / "family.db"))
 
 
 # --- Encryption at rest for OAuth/bank tokens (key derived from SECRET_KEY) ---

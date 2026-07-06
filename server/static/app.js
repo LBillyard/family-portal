@@ -135,6 +135,7 @@ const MODALS = {
       { label: 'Time', type: 'time', value: '19:00' },
       { label: 'Assigned to', type: 'select', options: ['Luke', 'Laura', 'Both'] },
       { label: 'Location', type: 'text', value: '' },
+      { label: 'Google calendar', type: 'select', options: ['Default'] },
     ],
   },
   'log-expense': {
@@ -290,6 +291,18 @@ function openModal(key) {
   document.getElementById('modal-cancel').onclick = closeModal;
   document.getElementById('modal-save').onclick = () => submitModal(key);
 
+  // Drive the Google-calendar picker from connected accounts (write-back target)
+  if (key === 'add-event') {
+    const calLabel = [...document.querySelectorAll('.wf-modal label')].find((l) => l.textContent.trim().startsWith('Google calendar'));
+    const accts = store.settings?.google_accounts || [];
+    const sel = calLabel?.querySelector('select');
+    if (sel && accts.length) {
+      sel.innerHTML = accts.map((a) => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join('');
+    }
+    // Hide the picker unless there's a real choice to make (2+ calendars).
+    if (calLabel && accts.length < 2) calLabel.style.display = 'none';
+  }
+
   // Drive the account picker from real accounts so IDs always resolve
   if (key === 'log-expense') {
     const accountLabel = [...document.querySelectorAll('.wf-modal label')].find((l) => l.textContent.trim().startsWith('Account'));
@@ -322,6 +335,7 @@ async function submitModal(key) {
       const timeVal = f['Time'] || '09:00';
       const start = dateVal.includes('T') ? dateVal : `${dateVal}T${timeVal}:00`;
       const assignee = (f['Assigned to'] || 'Luke').toLowerCase();
+      const calChoice = f['Google calendar'];
       await api('/events', {
         method: 'POST',
         body: JSON.stringify({
@@ -330,6 +344,7 @@ async function submitModal(key) {
           end: start,
           user_id: assignee.includes('laura') ? 'partner' : 'luke',
           location: f['Location'] || null,
+          google_account_id: calChoice && calChoice !== 'Default' ? calChoice : null,
         }),
       });
     } else if (key === 'log-expense') {
@@ -2295,6 +2310,10 @@ function initActions() {
       document.getElementById('receipt-file-input')?.click();
       return;
     }
+    if (action === 'scan-email') {
+      scanEmailReceipts();
+      return;
+    }
     if (action === 'send-reminders') {
       api('/notifications/send-reminders', { method: 'POST' })
         .then((r) => {
@@ -2601,6 +2620,62 @@ async function openWeather() {
 function closeWeather() {
   document.getElementById('weather-panel').hidden = true;
   document.getElementById('weather-backdrop').hidden = true;
+}
+
+async function scanEmailReceipts() {
+  showToast('Scanning email for receipts…');
+  let res;
+  try {
+    res = await api('/finances/scan-email', { method: 'POST' });
+  } catch (err) {
+    return showToast(err.message, true);
+  }
+  const drafts = res.drafts || [];
+  if (!drafts.length) {
+    if ((res.needs_reconnect || []).length) {
+      return showToast('Reconnect Google in Settings to grant Gmail access', true);
+    }
+    return showToast('No receipts found in recent emails');
+  }
+  const rows = drafts
+    .map(
+      (d, i) => `
+      <label class="wx-day" style="cursor:pointer">
+        <input type="checkbox" class="email-receipt-cb" data-idx="${i}" checked style="margin-right:6px">
+        <span class="wx-day-desc">${esc(d.description || d.merchant || 'Receipt')}<br><span style="font-size:0.6875rem;color:var(--text-muted)">${esc(d.date || '')} · ${esc(d.email_subject || '')}</span></span>
+        <span class="wx-day-temp neg">${fmt.gbp(d.amount)}</span>
+      </label>`
+    )
+    .join('');
+  window._emailDrafts = drafts;
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal" role="dialog">
+      <div class="wf-modal-header"><h3>Email receipts found</h3><p>${drafts.length} receipt(s) from your inbox. Review and import.</p></div>
+      <div class="wf-modal-body">${rows}</div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="email-import-btn">Import selected</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('email-import-btn').onclick = async () => {
+    const picked = [...document.querySelectorAll('.email-receipt-cb')]
+      .filter((cb) => cb.checked)
+      .map((cb) => window._emailDrafts[parseInt(cb.dataset.idx, 10)]);
+    if (!picked.length) return closeModal();
+    try {
+      const r = await api('/finances/import-email-receipts', {
+        method: 'POST',
+        body: JSON.stringify({ drafts: picked, account_id: 'joint' }),
+      });
+      closeModal();
+      showToast(`Imported ${r.imported} receipt(s)`);
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  };
 }
 
 const TOOL_LABELS = {

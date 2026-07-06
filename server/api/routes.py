@@ -20,7 +20,7 @@ from server.services import assistant as ai_assistant, media as media_files, sub
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
-from server.services import weather as weather_svc
+from server.services import weather as weather_svc, gmail_receipts
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
 from shared.schemas import (
     AccountUpdate,
@@ -31,6 +31,7 @@ from shared.schemas import (
     ChangePasswordRequest,
     TransactionCategoryUpdate,
     DocumentCreate,
+    EmailReceiptImport,
     EventCreate,
     HolidayIdeaRequest,
     LoginRequest,
@@ -439,7 +440,7 @@ def create_event(body: EventCreate, user: dict = Depends(require_user)):
     )
     if google_calendar.is_configured():
         try:
-            google_calendar.push_event_to_google(uid, event)
+            google_calendar.push_event_to_google(uid, event, account_id=body.google_account_id)
         except Exception as exc:
             logger.warning("Google write-back failed: %s", exc)
     activity_svc.log(user, "created", "event", f"Added event: {body.title}", entity_id=event["id"])
@@ -593,6 +594,16 @@ def transfer_funds(body: TransferCreate, user: dict = Depends(require_user)):
     return {"ok": True, "from": accounts[src]["name"], "to": accounts[dst]["name"], "amount": amount}
 
 
+def _csv_safe(value) -> str:
+    """Neutralise CSV/formula injection: a cell starting with = + - @ (or a
+    control char) is executed as a formula by Excel/Sheets. Prefix with a
+    single quote so it's treated as text."""
+    s = "" if value is None else str(value)
+    if s and (s[0] in "=+-@\t\r" or s[0] == "\x00"):
+        return "'" + s
+    return s
+
+
 @router.get("/finances/export")
 def export_transactions(_: dict = Depends(require_user)):
     import csv as _csv
@@ -602,7 +613,13 @@ def export_transactions(_: dict = Depends(require_user)):
     writer = _csv.writer(buf)
     writer.writerow(["Date", "Description", "Category", "Account", "Amount"])
     for t in db.list_transactions(limit=100000):
-        writer.writerow([t["date"], t["description"], t["category"], t["account"], f"{t['amount']:.2f}"])
+        writer.writerow([
+            _csv_safe(t["date"]),
+            _csv_safe(t["description"]),
+            _csv_safe(t["category"]),
+            _csv_safe(t["account"]),
+            f"{t['amount']:.2f}",
+        ])
     return Response(
         content=buf.getvalue(),
         media_type="text/csv",
@@ -919,6 +936,30 @@ async def scan_receipt(
         entity_id=result["transaction"]["id"],
     )
     return result
+
+
+@router.post("/finances/scan-email")
+async def scan_email_receipts(user: dict = Depends(require_user)):
+    """Scan the user's connected Gmail accounts for receipt emails; returns drafts (no writes)."""
+    if not openrouter.is_configured():
+        raise HTTPException(status_code=503, detail="OpenRouter not configured — required for receipt OCR")
+    if not google_calendar.is_configured():
+        raise HTTPException(status_code=503, detail="Google not configured")
+    try:
+        result = await gmail_receipts.scan_for_user(user["id"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Email scan failed: {exc}") from exc
+    return result
+
+
+@router.post("/finances/import-email-receipts")
+def import_email_receipts(body: EmailReceiptImport, user: dict = Depends(require_user)):
+    """Commit reviewed email-receipt drafts into the ledger."""
+    drafts = [d.model_dump() for d in body.drafts]
+    created = gmail_receipts.commit_drafts(drafts, user, account_id=body.account_id or "joint")
+    for txn in created:
+        activity_svc.log(user, "created", "transaction", f"Email receipt: {txn['description']}", entity_id=txn["id"])
+    return {"imported": len(created), "transactions": created}
 
 
 @router.post("/notifications/send-reminders")

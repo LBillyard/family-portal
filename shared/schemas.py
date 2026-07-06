@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -6,6 +6,21 @@ from pydantic import BaseModel, Field
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class EmailReceiptDraft(BaseModel):
+    description: str
+    amount: float
+    date: Optional[str] = None
+    category: Optional[str] = None
+    merchant: Optional[str] = None
+    message_id: Optional[str] = None
+    email_subject: Optional[str] = None
+
+
+class EmailReceiptImport(BaseModel):
+    drafts: List[EmailReceiptDraft]
+    account_id: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -28,6 +43,7 @@ class EventCreate(BaseModel):
     all_day: bool = False
     user_id: Optional[str] = None
     location: Optional[str] = None
+    google_account_id: Optional[str] = None  # which connected Google calendar to write to
 
 
 class BillCreate(BaseModel):

@@ -14,7 +14,10 @@ from server import database as db
 
 logger = logging.getLogger(__name__)
 
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/gmail.readonly",  # receipt ingestion (read-only)
+]
 
 
 def _client_config() -> dict:
@@ -165,12 +168,18 @@ def sync_all() -> dict:
     return results
 
 
-def push_event_to_google(user_id: str, event: dict) -> str | None:
-    """Write a portal event to the user's first connected Google account."""
-    accounts = db.list_google_accounts(user_id)
-    if not accounts:
-        return None
-    acct = db.get_google_account_internal(accounts[0]["id"])
+def push_event_to_google(user_id: str, event: dict, account_id: str | None = None) -> str | None:
+    """Write a portal event to a chosen connected Google account.
+
+    Target selection: the explicit account_id (any household account) → the
+    event's own google_account_id → the assignee's first connected account."""
+    target_id = account_id or event.get("google_account_id")
+    acct = db.get_google_account_internal(target_id) if target_id else None
+    if not acct:
+        accounts = db.list_google_accounts(user_id)
+        if not accounts:
+            return None
+        acct = db.get_google_account_internal(accounts[0]["id"])
     if not acct:
         return None
     service = _service(_credentials(acct["token_json"]))

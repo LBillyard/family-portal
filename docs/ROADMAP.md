@@ -1,43 +1,42 @@
 # Roadmap & known gaps
 
-Prioritized work for humans and AI agents continuing Family Portal.
+Prioritized work for humans and AI agents continuing **The Hub**. Verify against
+the code — this file is kept roughly current but the source is the truth.
 
-## P0 — Before public internet exposure
+## Done (was P0/P1/P2)
 
-- [ ] **Change default passwords** — seeded `family123` in `database.py`; add `/api/auth/change-password` or reset flow
-- [ ] **Strong SECRET_KEY** — required when `ENV=production` (enforced in `main.py`)
-- [ ] **HTTPS** — terminate TLS at Caddy, nginx, or Cloudflare Tunnel; set `PUBLIC_URL=https://...`
-- [ ] **Encrypt OAuth tokens** — Google + TrueLayer tokens currently plaintext in SQLite
+- ✅ Password change flow; seeded passwords rotated off `family123` on the live box
+- ✅ HTTPS in production (Caddy + Let's Encrypt at `hub.squirrelinvestments.co.uk`)
+- ✅ OAuth tokens encrypted at rest
+- ✅ XSS: dynamic strings escaped via `esc()`; CSP + HSTS headers
+- ✅ Login rate limiting (429 after repeated failures)
+- ✅ AI tool confirmations on-web; WhatsApp assistant acts immediately by design
+- ✅ **argon2id** password hashing with PBKDF2 fallback + transparent upgrade on login
+- ✅ **CSV formula-injection guard** on finance export
+- ✅ **Two-way Google Calendar** write-back, targetable per connected calendar
+- ✅ **Automated tests** — `pytest` suite in `tests/` (auth, weather, finance, API smoke)
+- ✅ Export finances to CSV
+- ✅ Weather widget + holiday-aware forecast; hourly auto-sync (Google + banks)
+- ✅ **Gmail receipt ingestion** — scan inbox for receipts → OCR → reviewable drafts
 
-## P1 — Security hardening
+## P2 — Features (open)
 
-- [ ] **Full XSS fix** — escape all dynamic strings in `app.js` `innerHTML` (only `esc()` in toasts + assistant today)
-- [ ] **Login rate limiting** — slowapi or nginx `limit_req`
-- [ ] **AI tool confirmations** — confirm before bills, transactions, destructive actions
-- [ ] **Restrict AWS CIDRs** — `deploy/aws/cloudformation.yaml` defaults to `0.0.0.0/0`
-
-## P2 — Features
-
-- [ ] **Two-way Google Calendar** — write portal events back to Google
-- [ ] **Push notifications** — appointment/bill reminders
-- [ ] **Bank disconnect ownership** — optional per-user check
+- [ ] **Push notifications** — appointment/bill reminders (web push)
 - [ ] **Vault search** — full-text on document names/notes
-- [ ] **Holiday booking workflow** — flights, hotels checklist automation
-- [ ] **Automated tests** — pytest for auth, CRUD, assistant tools
+- [ ] **Holiday booking workflow** — flights/hotels checklist automation
+- [ ] Gmail receipts: support PDF attachments (needs a PDF→image step) — currently images only
+- [ ] Bank disconnect ownership — optional per-user check
 
 ## P3 — Polish
 
-- [ ] Argon2/bcrypt instead of PBKDF2
 - [ ] Dark mode toggle
 - [ ] Mobile nav improvements
-- [ ] Export finances to CSV
+- [ ] Expand test coverage (assistant tool-calls, bank sync, calendar sync)
+- [ ] `pip-audit` in CI (dependency already in `requirements-dev.txt`)
 
-## Completed (reference)
+## Ops notes
 
-- Core CRUD + dashboard
-- Google Calendar OAuth + sync
-- TrueLayer Open Banking (Starling, Revolut, Amex, Virgin)
-- Document vault with file uploads
-- AI assistant with OpenRouter tool calling
-- PWA manifest + service worker
-- Security headers, session rotation, production mode, vault download hardening
+- Deploy = `scp` changed files to `/opt/family-portal` (the box is NOT a git repo) + `systemctl restart family-portal`. Bump `?v=` in `index.html` on JS/CSS changes.
+- Timers on the box: `family-portal-digest.timer` (07:00 digest) and `family-portal-sync.timer` (hourly Google + bank sync).
+- `argon2-cffi` must be `pip install`ed into the box venv (it's in `requirements.txt`); without it, auth safely falls back to PBKDF2.
+- Gmail scope (`gmail.readonly`) was added to `SCOPES` — existing Google connections must be **re-connected** to grant it before email receipt scanning works.
