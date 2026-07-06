@@ -168,7 +168,7 @@ def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -
     # Subscriptions/renewals coming up in the next week.
     if b["urgent_renewals"]:
         sections.append("🔔 Renewing: " + ", ".join(
-            f"{r['name']} ({r['days_until']}d)" for r in b["urgent_renewals"][:3]))
+            f"{r['title']} ({r['days_until']}d)" for r in b["urgent_renewals"][:3]))
 
     body = f"{date_str} — " + " · ".join(sections)
     return re.sub(r"\s+", " ", body).strip()[:1000]
