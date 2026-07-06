@@ -14,6 +14,7 @@ Config (.env):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -21,12 +22,20 @@ import json
 import logging
 import os
 import re
+import time
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 API = "https://api.twilio.com/2010-04-01"
+CONTENT_API = "https://content.twilio.com/v1"
+
+# Whether the digest Content template is Meta-approved — cached so we don't hit the
+# Content API on every send. An approved template delivers outside the 24h window;
+# until then we fall back to a free-form message (which delivers inside the window).
+_approval = {"ts": 0.0, "approved": False}
+_APPROVAL_TTL = 1800.0
 
 
 def _sid() -> str:
@@ -75,22 +84,68 @@ async def send_text(to: str, body: str) -> dict:
     return await _send({"From": _from(), "To": _to_whatsapp(to), "Body": body[:1600]})
 
 
-async def send_digest(to: str, text: str) -> dict:
-    """Use an approved Content template if configured (needed for the proactive
-    7am send outside the 24h window); fall back to free-form if the template
-    isn't usable yet (e.g. still pending approval) — that still delivers when
-    the recipient has messaged within 24h."""
+async def template_approved() -> bool:
+    """Is the digest Content template Meta-approved? Cached for _APPROVAL_TTL.
+
+    A pending/rejected template silently FAILS at delivery (Twilio accepts the
+    send, then WhatsApp rejects it with 63112) — so we must not use it until it's
+    actually approved."""
     content_sid = os.environ.get("TWILIO_CONTENT_SID", "").strip()
-    if content_sid:
+    if not content_sid or not is_configured():
+        return False
+    now = time.time()
+    if now - _approval["ts"] < _APPROVAL_TTL:
+        return _approval["approved"]
+    approved = _approval["approved"]  # keep last-known on error
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(f"{CONTENT_API}/Content/{content_sid}/ApprovalRequests", auth=(_sid(), _auth_token()))
+            r.raise_for_status()
+            approved = (r.json().get("whatsapp") or {}).get("status", "") == "approved"
+    except Exception as exc:
+        logger.warning("Could not check template approval: %s", exc)
+    _approval.update(ts=now, approved=approved)
+    return approved
+
+
+async def message_status(sid: str) -> dict:
+    """Fetch a sent message's current delivery status (queued/sent/delivered/read/failed)."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get(f"{API}/Accounts/{_sid()}/Messages/{sid}.json", auth=(_sid(), _auth_token()))
+        r.raise_for_status()
+        return r.json()
+
+
+async def confirm_delivery(sid: str | None, timeout: float = 12.0) -> str:
+    """Poll a message until it reaches a terminal state or timeout. Returns the
+    Twilio status ('delivered'/'read'/'failed'/'undelivered'/'sent'/'queued')."""
+    if not sid:
+        return "unknown"
+    status = "queued"
+    waited = 0.0
+    while waited < timeout:
+        await asyncio.sleep(2.5)
+        waited += 2.5
         try:
-            return await _send({
-                "From": _from(),
-                "To": _to_whatsapp(to),
-                "ContentSid": content_sid,
-                "ContentVariables": json.dumps({"1": text}),
-            })
-        except Exception as exc:
-            logger.warning("Template digest failed (%s); falling back to free-form", exc)
+            st = await message_status(sid)
+        except Exception:
+            continue
+        status = st.get("status", status)
+        if status in ("delivered", "read", "failed", "undelivered"):
+            break
+    return status
+
+
+async def send_digest(to: str, text: str) -> dict:
+    """Deliver the morning digest. Uses the approved Content template when Meta has
+    approved it (works any time, even outside the 24h window); otherwise sends
+    free-form, which delivers when the recipient has messaged within the last 24h."""
+    if await template_approved():
+        content_sid = os.environ.get("TWILIO_CONTENT_SID", "").strip()
+        return await _send({
+            "From": _from(), "To": _to_whatsapp(to),
+            "ContentSid": content_sid, "ContentVariables": json.dumps({"1": text}),
+        })
     return await _send({"From": _from(), "To": _to_whatsapp(to), "Body": text[:1600]})
 
 

@@ -34,3 +34,12 @@ async def send_text(to: str, body: str) -> dict:
 
 async def send_digest(to: str, text: str) -> dict:
     return await _impl().send_digest(to, text)
+
+
+async def confirm_delivery(sid: str | None, timeout: float = 12.0) -> str:
+    """Real delivery status of a sent message ('delivered'/'failed'/...), or
+    'unknown' for providers that don't expose it."""
+    impl = _impl()
+    if hasattr(impl, "confirm_delivery"):
+        return await impl.confirm_delivery(sid, timeout)
+    return "unknown"

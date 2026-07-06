@@ -43,12 +43,18 @@ async def run() -> int:
             continue
         line = briefing_svc.whatsapp_digest_line(full, weather=weather_line)
         try:
-            await whatsapp.send_digest(phone, line)
-            sent += 1
-            logger.info("Digest sent to %s (%s)", u["name"], phone)
+            res = await whatsapp.send_digest(phone, line)
+            # "accepted by Twilio" != "delivered by WhatsApp" — confirm the real status.
+            status = await whatsapp.confirm_delivery(res.get("sid") if isinstance(res, dict) else None)
+            if status in ("failed", "undelivered"):
+                logger.error("Digest to %s (%s) NOT delivered — status=%s. Likely outside the "
+                             "24h window with no approved template.", u["name"], phone, status)
+            else:
+                sent += 1
+                logger.info("Digest to %s (%s): %s", u["name"], phone, status)
         except Exception as exc:
             logger.error("Digest failed for %s: %s", u["name"], exc)
-    logger.info("Morning digest complete — %d sent", sent)
+    logger.info("Morning digest complete — %d delivered", sent)
     return sent
 
 
