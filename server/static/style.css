@@ -4979,6 +4979,49 @@ dialog select:focus {
 .warranty-pill.active { background: var(--green-bg); color: var(--green); }
 .warranty-pill.none { color: var(--text-muted); }
 
+/* -------------------------------------------------------------------------- */
+/* Home — Gift ideas / wishlists                                              */
+/* Grouped by person; reuses .maintenance-row + .row-edit. Purchased items    */
+/* read muted + struck-through. All colours from semantic vars (dark-safe).   */
+/* -------------------------------------------------------------------------- */
+.wishlist-group { display: flex; flex-direction: column; gap: 8px; }
+.wishlist-group + .wishlist-group { margin-top: 16px; }
+.wishlist-group-head {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+.wishlist-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.wishlist-check {
+  width: auto;
+  margin-top: 3px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.wishlist-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wishlist-title { font-weight: 700; color: var(--navy-900); }
+.wishlist-side { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.wishlist-link { font-weight: 600; color: var(--accent); }
+.wishlist-link-plain { color: var(--text-muted); word-break: break-all; }
+
+.wishlist-purchased { background: var(--surface-muted); }
+.wishlist-purchased .wishlist-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.wishlist-purchased .subscription-meta,
+.wishlist-purchased .hint-small { opacity: 0.7; }
+
 /* Shared: full-width inline-edit field + textarea (recipe ingredients/method) */
 .row-edit-fields label.row-edit-full { flex-basis: 100%; }
 .row-edit-fields textarea {

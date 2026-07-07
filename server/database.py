@@ -296,6 +296,7 @@ def init_db() -> None:
                 large_transaction_alerts INTEGER NOT NULL DEFAULT 1,
                 large_transaction_threshold INTEGER NOT NULL DEFAULT 200,
                 weekly_finance_summary INTEGER NOT NULL DEFAULT 1,
+                budget_alerts INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT
             );
 
@@ -442,6 +443,19 @@ def init_db() -> None:
                 due_date TEXT,
                 done INTEGER NOT NULL DEFAULT 0,
                 notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            -- Gift ideas / wishlist, optionally tagged to a person.
+            CREATE TABLE IF NOT EXISTS wishlist_items (
+                id TEXT PRIMARY KEY,
+                person TEXT,
+                title TEXT NOT NULL,
+                url TEXT,
+                price REAL,
+                notes TEXT NOT NULL DEFAULT '',
+                purchased INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -667,6 +681,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN large_transaction_threshold INTEGER NOT NULL DEFAULT 200")
     if "weekly_finance_summary" not in pcols:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN weekly_finance_summary INTEGER NOT NULL DEFAULT 1")
+    if "budget_alerts" not in pcols:
+        conn.execute("ALTER TABLE notification_prefs ADD COLUMN budget_alerts INTEGER NOT NULL DEFAULT 1")
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -2840,6 +2856,7 @@ _PREFS_BOOL_FIELDS = (
     "document_expiry_reminders",
     "large_transaction_alerts",
     "weekly_finance_summary",
+    "budget_alerts",
 )
 
 
@@ -3883,3 +3900,106 @@ def care_due_within(days: int) -> list[dict]:
             if floor <= due <= horizon:
                 out.append(_care_item_out(d))
     return out
+
+
+# --- Wishlist (gift ideas per person) ---
+
+def _wishlist_item_out(r: dict) -> dict:
+    price = r.get("price")
+    return {
+        "id": r["id"],
+        "person": r.get("person"),
+        "title": r["title"],
+        "url": r.get("url"),
+        "price": float(price) if price is not None else None,
+        "notes": r["notes"],
+        "purchased": bool(r["purchased"]),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_wishlist_items(person: Optional[str] = None) -> list[dict]:
+    """All wishlist items, or just one person's. Unpurchased first, then by
+    person and title."""
+    with get_conn() as conn:
+        if person is not None:
+            rows = conn.execute(
+                "SELECT * FROM wishlist_items WHERE person = ? ORDER BY purchased ASC, person, title",
+                (person,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM wishlist_items ORDER BY purchased ASC, person, title"
+            ).fetchall()
+        return [_wishlist_item_out(row_to_dict(r)) for r in rows]
+
+
+def get_wishlist_item(item_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM wishlist_items WHERE id = ?", (item_id,)).fetchone()
+        return _wishlist_item_out(row_to_dict(row)) if row else None
+
+
+def create_wishlist_item(data: dict) -> dict:
+    wid = _new_id()
+    now = _utcnow()
+    price = data.get("price")
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO wishlist_items
+                   (id, person, title, url, price, notes, purchased, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                wid,
+                data.get("person"),
+                data["title"].strip(),
+                data.get("url"),
+                float(price) if price is not None else None,
+                data.get("notes") or "",
+                1 if data.get("purchased") else 0,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM wishlist_items WHERE id = ?", (wid,)).fetchone()
+        return _wishlist_item_out(row_to_dict(row))
+
+
+def update_wishlist_item(item_id: str, data: dict) -> Optional[dict]:
+    """Partial update. The nullable fields (person/url/price) use presence
+    (`key in data`) so they can be cleared to NULL; `notes` coerces None to ''
+    to honour its NOT NULL constraint; `purchased` is coerced to 0/1."""
+    fields, values = [], []
+    if data.get("title") is not None:
+        fields.append("title = ?")
+        values.append(data["title"].strip())
+    for key in ("person", "url"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "price" in data:
+        fields.append("price = ?")
+        values.append(float(data["price"]) if data["price"] is not None else None)
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"] if data["notes"] is not None else "")
+    if "purchased" in data and data["purchased"] is not None:
+        fields.append("purchased = ?")
+        values.append(1 if data["purchased"] else 0)
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM wishlist_items WHERE id = ?", (item_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(item_id)
+            conn.execute(f"UPDATE wishlist_items SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM wishlist_items WHERE id = ?", (item_id,)).fetchone()
+        return _wishlist_item_out(row_to_dict(row))
+
+
+def delete_wishlist_item(item_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM wishlist_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0

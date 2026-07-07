@@ -291,6 +291,7 @@ class NotificationPrefsUpdate(BaseModel):
     large_transaction_alerts: Optional[bool] = None
     large_transaction_threshold: Optional[int] = None
     weekly_finance_summary: Optional[bool] = None
+    budget_alerts: Optional[bool] = None
 
 
 class TradespersonCreate(BaseModel):
@@ -463,4 +464,22 @@ class CareItemUpdate(BaseModel):
     due_date: Optional[str] = None
     done: Optional[bool] = None
     notes: Optional[str] = None
+
+
+class WishlistCreate(BaseModel):
+    title: str
+    person: Optional[str] = None
+    url: Optional[str] = None
+    price: Optional[float] = None
+    notes: Optional[str] = ""
+    purchased: Optional[bool] = False
+
+
+class WishlistUpdate(BaseModel):
+    title: Optional[str] = None
+    person: Optional[str] = None
+    url: Optional[str] = None
+    price: Optional[float] = None
+    notes: Optional[str] = None
+    purchased: Optional[bool] = None
 

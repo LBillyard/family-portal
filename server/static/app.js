@@ -141,7 +141,10 @@ function icon(name) {
 function esc(str) {
   const d = document.createElement('div');
   d.textContent = str ?? '';
-  return d.innerHTML;
+  // textContent escapes < > & but NOT quotes, so the result is unsafe inside a
+  // double/single-quoted HTML attribute (attribute-breakout XSS). Escape quotes too
+  // so esc() is safe in BOTH text and attribute contexts across the whole app.
+  return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 const fmt = {
@@ -2288,6 +2291,147 @@ function renderOccasions(list) {
     : '<div class="vault-empty"><p>No occasions yet</p><p class="hint-small">Add birthdays and anniversaries to get a countdown and a reminder a week before.</p></div>';
 }
 
+// --- Home: Gift ideas / wishlists -------------------------------------------
+// Own endpoint (/api/wishlist). Items are grouped by person (blank person →
+// "Anyone / general"); within a group, purchased items sink to the bottom and
+// render muted + struck-through. Reuses the .maintenance-row + .row-edit pattern.
+
+const WISHLIST_GENERAL = '__general__';
+
+async function loadWishlist() {
+  const list = document.getElementById('wishlist-list');
+  if (!list) return;
+  try {
+    const data = await api('/wishlist');
+    store.wishlist = data.items || [];
+    renderWishlist(store.wishlist);
+  } catch {
+    list.innerHTML = '<div class="vault-empty"><p>Couldn\'t load gift ideas.</p></div>';
+  }
+}
+
+function findWishlist(id) {
+  return (store.wishlist || []).find((w) => String(w.id) === String(id));
+}
+
+// Build a create/update payload from the inline row's fields (shared by add + edit).
+function wishlistPayload(f) {
+  const price = parseFloat(f.price);
+  return {
+    person: (f.person || '').trim() || null,
+    title: (f.title || '').trim(),
+    url: (f.url || '').trim() || null,
+    price: Number.isFinite(price) ? price : null,
+    notes: (f.notes || '').trim() || null,
+  };
+}
+
+// Render the URL as a safe new-tab link only when it parses as a real http(s)
+// URL; otherwise show it as plain muted text. Href is escaped in both cases.
+function wishlistLink(url) {
+  const u = (url || '').trim();
+  if (!u) return '';
+  let ok = false;
+  try { const p = new URL(u); ok = p.protocol === 'http:' || p.protocol === 'https:'; } catch { ok = false; }
+  if (ok) {
+    return `<a class="wishlist-link" href="${esc(u)}" target="_blank" rel="noopener">Link ↗</a>`;
+  }
+  return `<span class="wishlist-link-plain">${esc(u)}</span>`;
+}
+
+function wishlistRowInner(w) {
+  const meta = [];
+  const price = parseFloat(w.price);
+  if (Number.isFinite(price)) meta.push(fmt.gbp(price));
+  const link = wishlistLink(w.url);
+  if (link) meta.push(link);
+  return `
+        <div class="wishlist-main">
+          <input type="checkbox" class="wishlist-check" data-wish-id="${w.id}"${w.purchased ? ' checked' : ''} title="${w.purchased ? 'Bought' : 'Mark as bought'}" aria-label="Mark as bought">
+          <div class="wishlist-body">
+            <div class="wishlist-title">${esc(w.title)}</div>
+            ${meta.length ? `<div class="subscription-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}
+            ${w.notes ? `<p class="hint-small">${esc(w.notes)}</p>` : ''}
+          </div>
+        </div>
+        <div class="wishlist-side">
+          <button class="bill-edit-btn wf-action" data-action="edit-wishlist" data-wish-id="${w.id}" title="Edit gift idea" aria-label="Edit gift idea">✎</button>
+        </div>`;
+}
+
+function wishlistEditInner(w) {
+  return `
+    <div class="row-edit" data-wish-id="${w.id}">
+      <input type="text" class="te-input" data-f="title" value="${esc(w.title)}" placeholder="Gift idea">
+      <div class="row-edit-fields">
+        <label>Person<input type="text" data-f="person" value="${esc(w.person || '')}" placeholder="e.g. Arthur"></label>
+        <label>Link<input type="url" data-f="url" value="${esc(w.url || '')}" placeholder="https://…"></label>
+        <label>Price £<input type="number" step="0.01" min="0" data-f="price" value="${Number.isFinite(parseFloat(w.price)) ? w.price : ''}"></label>
+        <label>Notes<input type="text" data-f="notes" value="${esc(w.notes || '')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-wishlist-inline" data-wish-id="${w.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-wishlist-inline" data-wish-id="${w.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-wishlist" data-wish-id="${w.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function wishlistAddInner() {
+  return `
+    <div class="row-edit" id="wishlist-add-form">
+      <input type="text" class="te-input" data-f="title" placeholder="Gift idea (e.g. Lego set)">
+      <div class="row-edit-fields">
+        <label>Person<input type="text" data-f="person" placeholder="e.g. Arthur"></label>
+        <label>Link<input type="url" data-f="url" placeholder="https://…"></label>
+        <label>Price £<input type="number" step="0.01" min="0" data-f="price" placeholder="0"></label>
+        <label>Notes<input type="text" data-f="notes" placeholder="Optional"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-wishlist-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="wishlist-list">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderWishlist(items) {
+  const el = document.getElementById('wishlist-list');
+  if (!el) return;
+  if (!items || !items.length) {
+    el.innerHTML = '<div class="vault-empty"><p>No gift ideas yet</p><p class="hint-small">Jot down presents for birthdays and Christmas so you\'re never stuck.</p></div>';
+    return;
+  }
+  // Group by person; blank person → "Anyone / general".
+  const groups = new Map();
+  items.forEach((w) => {
+    const key = (w.person && w.person.trim()) ? w.person.trim() : WISHLIST_GENERAL;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(w);
+  });
+  // Named people first (alphabetical), the general group last.
+  const keys = [...groups.keys()].filter((k) => k !== WISHLIST_GENERAL).sort((a, b) => a.localeCompare(b));
+  if (groups.has(WISHLIST_GENERAL)) keys.push(WISHLIST_GENERAL);
+  el.innerHTML = keys.map((key) => {
+    const label = key === WISHLIST_GENERAL ? 'Anyone / general' : key;
+    // Purchased items sink to the bottom of their group.
+    const rows = groups.get(key).slice().sort((a, b) => (a.purchased ? 1 : 0) - (b.purchased ? 1 : 0));
+    const rowsHtml = rows
+      .map((w) => `<div class="maintenance-row wishlist-row${w.purchased ? ' wishlist-purchased' : ''}" data-wish-id="${w.id}">${wishlistRowInner(w)}</div>`)
+      .join('');
+    return `<div class="wishlist-group"><h4 class="wishlist-group-head">${esc(label)}</h4>${rowsHtml}</div>`;
+  }).join('');
+}
+
+// Toggle an item's "Bought" state, then reload so it re-sorts within its group.
+function toggleWishlistPurchased(id, purchased) {
+  api(`/wishlist/${id}/purchased`, {
+    method: 'POST',
+    body: JSON.stringify({ purchased }),
+  }).then(() => loadWishlist())
+    .then(() => showToast(purchased ? 'Marked as bought ✓' : 'Marked as not bought'))
+    .catch((err) => showToast(err.message, true));
+}
+
 // --- Home care: Home inventory / warranty tracker ---------------------------
 // Own endpoint (/api/inventory). Warranty status is computed client-side from
 // warranty_expiry vs today so the pill stays live without a server round-trip.
@@ -3344,6 +3488,7 @@ const NOTIF_PREF_ROWS = [
   ['renewal_reminders', 'Renewal reminders', 'Insurance, MOT and other renewals'],
   ['document_expiry_reminders', 'Document expiry', 'When a vault document is about to expire'],
   ['weekly_finance_summary', 'Weekly finance recap', 'A money round-up each Sunday evening'],
+  ['budget_alerts', 'Budget alerts', 'A heads-up when a spending category nears or exceeds its monthly budget'],
 ];
 
 // Fetch notification preferences and render the settings card. Hides the card
@@ -5114,6 +5259,57 @@ function initActions() {
       return;
     }
 
+    // --- Gift ideas / wishlists (home card) ----------------------------------
+    if (action === 'add-wishlist') {
+      const host = document.getElementById('wishlist-list');
+      if (host && !document.getElementById('wishlist-add-form')) {
+        host.insertAdjacentHTML('afterbegin', wishlistAddInner());
+        document.querySelector('#wishlist-add-form [data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-wishlist-new') {
+      const f = readInlineFields(document.getElementById('wishlist-add-form'));
+      if (!f.title || !f.title.trim()) { showToast('Gift idea needs a title', true); return; }
+      btn.disabled = true;
+      api('/wishlist', {
+        method: 'POST',
+        body: JSON.stringify(wishlistPayload(f)),
+      }).then(() => loadWishlist()).then(() => showToast('Gift idea added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-wishlist') {
+      const row = btn.closest('.maintenance-row');
+      const w = findWishlist(btn.dataset.wishId);
+      if (row && w) { row.classList.add('editing'); row.innerHTML = wishlistEditInner(w); row.querySelector('[data-f="title"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-wishlist-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Gift idea needs a title', true); return; }
+      api(`/wishlist/${btn.dataset.wishId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(wishlistPayload(f)),
+      }).then(() => loadWishlist()).then(() => showToast('Gift idea updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-wishlist-inline') {
+      const row = btn.closest('.maintenance-row');
+      const w = findWishlist(btn.dataset.wishId);
+      if (row && w) { row.classList.remove('editing'); row.innerHTML = wishlistRowInner(w); }
+      return;
+    }
+    if (action === 'delete-wishlist') {
+      if (!confirm('Delete this gift idea?')) return;
+      api(`/wishlist/${btn.dataset.wishId}`, { method: 'DELETE' })
+        .then(() => loadWishlist()).then(() => showToast('Gift idea deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+
     showToast(`“${action.replace(/-/g, ' ')}” isn’t available yet`);
   });
 
@@ -5137,6 +5333,13 @@ function initActions() {
     const shopCb = e.target.closest('.shopping-check');
     if (shopCb) {
       toggleShoppingItem(shopCb.dataset.shopId, shopCb.checked);
+      return;
+    }
+
+    // Gift ideas — tick/untick the "Bought" toggle.
+    const wishCb = e.target.closest('.wishlist-check');
+    if (wishCb) {
+      toggleWishlistPurchased(wishCb.dataset.wishId, wishCb.checked);
       return;
     }
 
@@ -6196,6 +6399,7 @@ async function load() {
   loadMeals();     // weekly meal planner on the home card (own endpoint)
   loadRecipes();   // Home → Recipe book card: save meals & plan them (own endpoint)
   loadOccasions(); // Home → Occasions card: birthdays & anniversaries (own endpoint)
+  loadWishlist();  // Home → Gift ideas / wishlists card (own endpoint)
   if (briefing) renderBriefing(briefing);
   if (activity) renderActivityFeed(activity);
   if (calendar) renderCalendar(calendar);

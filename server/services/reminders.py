@@ -319,4 +319,34 @@ async def run_reminders() -> dict:
             _push("Care due", body, badge=alerts)
             db.mark_notified(key)
 
+    # --- Budget alerts: warn the household once when a category hits 80% of its
+    #     monthly limit and again when it goes over 100%. The month is baked into
+    #     the de-dupe key so each level fires once per category per month and resets
+    #     next month. Gated by the household's budget-alerts toggle. ---
+    if prefs.get("budget_alerts"):
+        month = today.strftime("%Y-%m")
+        for b in db.list_budgets():
+            limit = b.get("limit") or 0
+            spent = b.get("spent") or 0
+            if limit <= 0:
+                continue
+            pct = spent / limit
+            level = "over" if pct >= 1.0 else ("warn" if pct >= 0.8 else None)
+            if level is None:
+                continue
+            checked += 1
+            key = f"budget:{b['category']}:{month}:{level}"  # 'warn' once + 'over' once, per month
+            if db.was_notified(key):
+                continue
+            cat = b.get("category")
+            if level == "over":
+                body = f"💸 Over budget: {cat} — £{spent:.0f} of £{limit:.0f} this month"
+            else:
+                body = f"⚠️ Budget alert: {cat} at {round(pct*100)}% (£{spent:.0f} of £{limit:.0f})"
+            if await _remind_household(_household(), body):
+                sent += len(_household())
+                alerts += 1
+                _push("Budget alert", body, badge=alerts)
+                db.mark_notified(key)
+
     return {"sent": sent, "checked": checked}

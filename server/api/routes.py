@@ -82,6 +82,8 @@ from shared.schemas import (
     TripCreate,
     TripPackingRequest,
     TripUpdate,
+    WishlistCreate,
+    WishlistUpdate,
 )
 
 router = APIRouter(prefix="/api")
@@ -1948,4 +1950,43 @@ def care_done_route(item_id: str, _: dict = Depends(require_user)):
 def delete_care_route(item_id: str, _: dict = Depends(require_user)):
     if not db.delete_care_item(item_id):
         raise HTTPException(status_code=404, detail="Care item not found")
+    return {"ok": True}
+
+
+# --- Wishlist (gift ideas & things the household wants) ---
+
+@router.get("/wishlist")
+def api_wishlist(person: str = "", _: dict = Depends(require_user)):
+    return {"items": db.list_wishlist_items(person or None)}
+
+
+@router.post("/wishlist")
+def create_wishlist_route(body: WishlistCreate, _: dict = Depends(require_user)):
+    if not (body.title or "").strip():
+        raise HTTPException(status_code=400, detail="Wishlist title is required")
+    return {"item": db.create_wishlist_item(body.model_dump())}
+
+
+@router.patch("/wishlist/{item_id}")
+def update_wishlist_route(item_id: str, body: WishlistUpdate, _: dict = Depends(require_user)):
+    item = db.update_wishlist_item(item_id, body.model_dump(exclude_unset=True))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Wishlist item not found")
+    return {"item": item}
+
+
+@router.post("/wishlist/{item_id}/purchased")
+def set_wishlist_purchased_route(
+    item_id: str, purchased: bool = Body(..., embed=True), _: dict = Depends(require_user)
+):
+    item = db.update_wishlist_item(item_id, {"purchased": bool(purchased)})
+    if item is None:
+        raise HTTPException(status_code=404, detail="Wishlist item not found")
+    return {"item": item}
+
+
+@router.delete("/wishlist/{item_id}")
+def delete_wishlist_route(item_id: str, _: dict = Depends(require_user)):
+    if not db.delete_wishlist_item(item_id):
+        raise HTTPException(status_code=404, detail="Wishlist item not found")
     return {"ok": True}
