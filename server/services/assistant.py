@@ -44,11 +44,15 @@ MAX_TOOL_ROUNDS = 8
 CONFIRM_TOOLS = {"log_transaction", "add_bill"}
 
 SYSTEM_PROMPT = """You are The Hub, the household assistant for a UK family (two adults: Luke and Laura).
-You can read household data and take actions using tools — calendar, tasks, appointments, holidays, bills, and transactions.
+You can read household data and take actions using tools across the whole home:
+- Diary & jobs: calendar events, tasks, appointments, the shopping list, meal plans and recipes.
+- Money: bills, transactions, and finance summaries (you can't connect banks or move money).
+- Family life: birthdays & anniversaries (occasions), gift ideas (wishlist), the kids' & pets' care (jabs/checkups), cars (MOT/tax/insurance/service), holidays & trips.
+- Long-term memory: you remember durable facts about the family. The "long-term memory" block (when shown) is what you already know — weave it in naturally, don't recite it. When they tell you something worth keeping for the future ("Arthur's shoe size is 6", "we're vegetarian now", "the boiler is a Worcester Bosch"), call remember_fact. Don't remember one-off/transient things.
 
 Rules:
 - Use tools to perform actions; do not pretend something was done without calling a tool.
-- Dates/times in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM). Today is provided in context.
+- Dates/times in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM). Context gives today's date, weekday and the current time — use them to resolve "today", "tonight", "tomorrow", "Friday", "next week", etc.
 - For calendar events and appointments, default to the person messaging you (see current_user in context) unless they name the other person or say "for Laura", "my", "I", etc. Pass who it's for as for_user.
 - ALWAYS make clear WHOSE an event/appointment is when you confirm or read it back. Use "you"/"your" when it belongs to the person messaging, otherwise name them — e.g. "You've got a haircut Fri at 2pm" or "Laura has a dentist appointment on Tue 8 Jul at 3pm". The tool result's "for" field (and the "whose" field on events you read) tells you: "you" means the sender, a name means the other person — phrase accordingly.
 - Amounts are in GBP. Expenses are negative when logging transactions.
@@ -558,6 +562,25 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember_fact",
+            "description": ("Save a DURABLE fact about the family to long-term memory so you recall it in future "
+                            "conversations. Use when they tell you something lasting worth keeping (a preference, "
+                            "allergy, size, a possession/car/pet, where relatives live). Do NOT use for one-off "
+                            "plans, tasks or appointments."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fact": {"type": "string", "description": "A short standalone sentence, e.g. 'Arthur's shoe size is 6'."},
+                    "about": {"type": "string", "enum": ["family", "luke", "laura"], "description": "Who it's about (default family)."},
+                    "category": {"type": "string", "enum": ["people", "places", "preferences", "possessions"]},
+                },
+                "required": ["fact"],
+            },
+        },
+    },
 ]
 
 
@@ -668,7 +691,10 @@ def clear_history(user_id: str, channel: str = "web") -> None:
 
 
 def build_context(user: dict) -> str:
-    today = date.today().isoformat()
+    now = datetime.now()
+    today = now.date().isoformat()
+    today_label = now.strftime("%A %-d %B %Y") if os.name != "nt" else now.strftime("%A %d %B %Y")
+    now_time = now.strftime("%H:%M")
     users = db.list_users()
     events = db.list_events()
     upcoming = [_tag_owner(e, user["id"]) for e in events if (e.get("start") or "")[:10] >= today][:8]
@@ -695,6 +721,8 @@ def build_context(user: dict) -> str:
     return json.dumps(
         {
             "today": today,
+            "today_label": today_label,
+            "now_time": now_time,
             "current_user": user["name"],
             "household": [{"id": u["id"], "name": u["name"]} for u in users],
             "upcoming_events": upcoming,
@@ -1028,6 +1056,19 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 }
             )
             return {"ok": True, "wishlist_item": item}
+        if name == "remember_fact":
+            fact = (args.get("fact") or "").strip()
+            if not fact:
+                return {"ok": False, "error": "Nothing to remember"}
+            if not mem_svc.is_enabled():
+                return {"ok": False, "error": "Memory isn't set up"}
+            saved = await mem_svc.remember(
+                fact,
+                category=args.get("category"),
+                subject=mem_svc._subject_from_name(args.get("about")),
+                source="assistant",
+            )
+            return {"ok": bool(saved), "remembered": (saved or {}).get("text", fact)}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)
