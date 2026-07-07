@@ -11,7 +11,12 @@
   <link rel="icon" href="/static/icon-192.png">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
   <meta name="theme-color" content="#0f1d32">
-  <link rel="stylesheet" href="/static/style.css?v=37">
+  <!-- iOS: install to Home Screen as a standalone app (enables Web Push + icon badges on iOS 16.4+) -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="The Hub">
+  <link rel="stylesheet" href="/static/style.css?v=38">
 </head>
 <body>
   <header class="site-header">
@@ -663,6 +668,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=37"></script>
+  <script src="/static/app.js?v=38"></script>
 </body>
 </html>

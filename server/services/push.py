@@ -34,9 +34,10 @@ def is_configured() -> bool:
     return bool(get_public_key() and _private_key() and _subject())
 
 
-def send_push(sub: dict, title: str, body: str, url: str = "/") -> bool:
+def send_push(sub: dict, title: str, body: str, url: str = "/", badge_count: int | None = None) -> bool:
     """Send one push notification. Best-effort: returns True on success, False on
     any failure. Prunes the stored subscription when the endpoint is gone (404/410).
+    `badge_count` (if given) sets the recipient's home-screen app-icon badge.
     """
     if not is_configured():
         return False
@@ -46,13 +47,16 @@ def send_push(sub: dict, title: str, body: str, url: str = "/") -> bool:
     except Exception:  # dependency not installed yet — push is optional
         logger.warning("pywebpush not installed — web push unavailable")
         return False
+    payload = {"title": title, "body": body, "url": url}
+    if badge_count is not None:
+        payload["badge_count"] = badge_count
     try:
         webpush(
             subscription_info={
                 "endpoint": endpoint,
                 "keys": {"p256dh": sub.get("p256dh", ""), "auth": sub.get("auth", "")},
             },
-            data=json.dumps({"title": title, "body": body, "url": url}),
+            data=json.dumps(payload),
             vapid_private_key=_private_key(),
             vapid_claims={"sub": _subject()},
         )
@@ -70,13 +74,13 @@ def send_push(sub: dict, title: str, body: str, url: str = "/") -> bool:
         return False
 
 
-def notify(title: str, body: str, url: str = "/") -> int:
+def notify(title: str, body: str, url: str = "/", badge_count: int | None = None) -> int:
     """Send to every stored subscription. Returns the number sent. No-op (0) when
-    push isn't configured."""
+    push isn't configured. `badge_count` sets the app-icon badge on each device."""
     if not is_configured():
         return 0
     sent = 0
     for sub in db.list_push_subscriptions():
-        if send_push(sub, title, body, url):
+        if send_push(sub, title, body, url, badge_count=badge_count):
             sent += 1
     return sent

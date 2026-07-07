@@ -70,6 +70,13 @@ self.addEventListener('push', (event) => {
     data = { body: event.data ? event.data.text() : '' };
   }
   const title = data.title || 'The Hub';
+  // Update the home-screen app-icon badge count (iOS 16.4+ / Android / desktop PWA).
+  if (typeof data.badge_count === 'number') {
+    try {
+      if (data.badge_count > 0) navigator.setAppBadge?.(data.badge_count);
+      else navigator.clearAppBadge?.();
+    } catch { /* badging unsupported — ignore */ }
+  }
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || '',

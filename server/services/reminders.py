@@ -80,15 +80,16 @@ async def _send_one(phone: str, body: str) -> bool:
         return False
 
 
-def _push(title: str, body: str) -> None:
+def _push(title: str, body: str, badge: int | None = None) -> None:
     """Best-effort web-push mirror of a reminder. A bonus channel that reaches a
     subscribed device even outside the WhatsApp 24h window; never blocks the run
     and never affects reminder de-duplication. Imported lazily so push (and its
-    optional pywebpush dependency) is never a hard requirement here."""
+    optional pywebpush dependency) is never a hard requirement here.
+    `badge` sets the home-screen app-icon count on the recipient's device."""
     try:
         from server.services import push
 
-        push.notify(title, body)
+        push.notify(title, body, badge_count=badge)
     except Exception:
         logger.debug("Push notify failed (non-fatal)", exc_info=True)
 
@@ -117,6 +118,7 @@ async def run_reminders() -> dict:
     household = _household()
     sent = 0
     checked = 0
+    alerts = 0  # distinct alert items pushed this run → home-screen icon badge count
 
     # --- Appointments: remind the appointment's OWNER (worded to them as "you"). ---
     if prefs.get("appointment_reminders"):
@@ -144,7 +146,8 @@ async def run_reminders() -> dict:
             body = f"⏰ Reminder: {a['title']}{at} on {when} ({whose})"
             if await _send_one(phone, body):
                 sent += 1
-                _push(a["title"], body)  # bonus channel — after the WhatsApp send, same item
+                alerts += 1
+                _push(a["title"], body, badge=alerts)  # bonus channel — after the WhatsApp send, same item
                 db.mark_notified(key)
 
     # --- Bills: unpaid, next due-day within lead. Reminds the whole household. ---
@@ -165,7 +168,8 @@ async def run_reminders() -> dict:
             body = f"💷 Reminder: {bill['name']}{amt} due {_fmt_date(due)}"
             if await _remind_household(household, body):
                 sent += len(household)
-                _push(bill["name"], body)
+                alerts += 1
+                _push(bill["name"], body, badge=alerts)
                 db.mark_notified(key)
 
     # --- Renewals: subscriptions & maintenance from the renewal calendar. Bills and
@@ -191,7 +195,8 @@ async def run_reminders() -> dict:
             body = f"🔔 Reminder: {item.get('title')} renews {when}"
             if await _remind_household(household, body):
                 sent += len(household)
-                _push(item.get("title") or "Renewal", body)
+                alerts += 1
+                _push(item.get("title") or "Renewal", body, badge=alerts)
                 db.mark_notified(key)
 
     # --- Document expiries: remind the whole household. ---
@@ -206,7 +211,8 @@ async def run_reminders() -> dict:
             body = f"📄 Reminder: {doc.get('name')} expires {when}"
             if await _remind_household(household, body):
                 sent += len(household)
-                _push(doc.get("name") or "Document", body)
+                alerts += 1
+                _push(doc.get("name") or "Document", body, badge=alerts)
                 db.mark_notified(key)
 
     return {"sent": sent, "checked": checked}

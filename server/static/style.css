@@ -4480,3 +4480,9 @@ dialog select:focus {
   font-weight: 600;
 }
 .trade-link:hover { text-decoration: underline; }
+
+/* "Add to your phone" install guide */
+.install-steps { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 10px; }
+.install-os { flex: 1; min-width: 210px; }
+.install-os strong { display: block; margin-bottom: 4px; color: var(--navy-800); }
+.install-os ol { margin: 0; padding-left: 18px; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }

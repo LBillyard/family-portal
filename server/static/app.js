@@ -2462,6 +2462,14 @@ function renderSettings(data) {
       <h3>Push notifications</h3>
       <p>Loading…</p>
     </div>
+    <div class="settings-section" id="install-app">
+      <h3>Add to your phone</h3>
+      <p>Install The Hub as an app to get a home-screen icon, push notifications, and an <strong>alert badge on the icon</strong> showing how many reminders are waiting.</p>
+      <div class="install-steps">
+        <div class="install-os"><strong>iPhone / iPad</strong><ol><li>Open The Hub in <em>Safari</em></li><li>Tap the <em>Share</em> button</li><li>Tap <em>Add to Home Screen</em></li><li>Open it from the new icon, then turn on push above</li></ol></div>
+        <div class="install-os"><strong>Android</strong><ol><li>Open The Hub in <em>Chrome</em></li><li>Tap the <em>⋮</em> menu</li><li>Tap <em>Install app</em> / <em>Add to Home screen</em></li></ol></div>
+      </div>
+    </div>
     <div class="settings-section">
       <h3>Household members</h3>
       <p>Colour labels used across calendar, tasks and appointments.</p>
@@ -2812,6 +2820,17 @@ function reminderFingerprint(list) {
   return (list || []).map((r) => `${r.type}|${r.text}|${r.when}`).sort().join('||');
 }
 
+// Set/clear the home-screen app-icon badge (installed PWA, incl. iOS 16.4+).
+function updateAppBadge(count) {
+  try {
+    if (!('setAppBadge' in navigator)) return;
+    if (count > 0) navigator.setAppBadge(count);
+    else navigator.clearAppBadge();
+  } catch {
+    /* Badging unsupported / not installed — ignore */
+  }
+}
+
 function renderNotifications(reminders, unread) {
   const badge = document.getElementById('notif-badge');
   let seen = null;
@@ -2821,12 +2840,14 @@ function renderNotifications(reminders, unread) {
     /* private browsing etc. — badge just behaves as before */
   }
   // Hide the count once the user has opened the panel for this exact set of reminders.
-  if (unread > 0 && reminderFingerprint(reminders) !== seen) {
+  const showing = unread > 0 && reminderFingerprint(reminders) !== seen;
+  if (showing) {
     badge.hidden = false;
     badge.textContent = unread;
   } else {
     badge.hidden = true;
   }
+  updateAppBadge(showing ? unread : 0);  // mirror the count onto the app icon
   const list = reminders || [];
   document.getElementById('notif-list').innerHTML = list.length
     ? list
@@ -3788,6 +3809,7 @@ function initActions() {
       /* storage unavailable — badge keeps its old behaviour */
     }
     document.getElementById('notif-badge').hidden = true;
+    updateAppBadge(0);  // viewing the alerts clears the home-screen icon badge
   };
   document.getElementById('notif-close').onclick = closeNotif;
   document.getElementById('notif-backdrop').onclick = closeNotif;
