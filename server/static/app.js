@@ -1871,8 +1871,8 @@ function renderForecast(d) {
   el.innerHTML = `
     <div class="forecast-figure ${positive ? 'pos' : 'neg'}">${fmt.gbp(d.projected_month_end_cash)}</div>
     <p class="forecast-sub">projected balance at the end of ${esc(d.month_label)}</p>
-    <p class="hint-small forecast-breakdown">Now ${fmt.gbp(d.current_cash)} − bills due ${fmt.gbp(d.bills_due_remaining)} − projected spend ${fmt.gbp(d.projected_further_spend)}</p>
-    <p class="hint-small">${days} day${days === 1 ? '' : 's'} left in ${esc(d.month_label)} · spent ${fmt.gbp(d.spent_so_far)} so far (~${fmt.gbp(d.avg_daily_spend)}/day)</p>`;
+    <p class="hint-small forecast-breakdown">Now ${fmt.gbp(d.current_cash)} + income to come ${fmt.gbp(d.expected_income_remaining)} − projected spend ${fmt.gbp(d.projected_further_spend)}</p>
+    <p class="hint-small">${days} day${days === 1 ? '' : 's'} left in ${esc(d.month_label)} · spent ${fmt.gbp(d.spent_so_far)} so far (~${fmt.gbp(d.avg_daily_spend)}/day) · ${fmt.gbp(d.bills_due_remaining)} bills unpaid</p>`;
 }
 
 // Spending-by-person mini-breakdown (own endpoint; degrades gracefully).
