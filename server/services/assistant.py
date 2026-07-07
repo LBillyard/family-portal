@@ -702,19 +702,21 @@ def build_context(user: dict) -> str:
     tasks = [t for t in db.list_tasks() if not t.get("done")][:8]
     trips = db.list_trips()
     summary = db.finance_summary()
-    # Wave-14 entities — kept COMPACT (titles/dates only) so the context stays small.
+    # Kept COMPACT (titles/dates only) so the context stays small, but with a wide
+    # enough horizon that the assistant volunteers what's coming without being asked:
+    # occasions ~a quarter ahead, vehicle/care renewals ~two months ahead.
     occasions_soon = [
         {"title": o["title"], "person": o.get("person"), "next_date": o.get("next_date"), "days_until": o.get("days_until")}
-        for o in occasions_svc.upcoming_occasions(30)
-    ]
+        for o in occasions_svc.upcoming_occasions(90)
+    ][:8]
     vehicle_renewals = [
         {"name": v["name"], "kind": v["kind"], "due_date": v["due_date"]}
-        for v in db.vehicles_due_within(30)
-    ]
+        for v in db.vehicles_due_within(60)
+    ][:8]
     care_soon = [
         {"title": c["title"], "who": c.get("dependent_name"), "due_date": c.get("due_date")}
-        for c in db.care_due_within(30)
-    ]
+        for c in db.care_due_within(60)
+    ][:8]
     week_end = (date.today() + timedelta(days=7)).isoformat()
     this_week_meals = [{"date": m["date"], "title": m["title"]} for m in db.list_meal_plans(today, week_end)]
     open_shopping = [s["text"] for s in db.list_shopping_items() if not s.get("done")]
