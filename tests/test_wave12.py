@@ -35,7 +35,8 @@ _NUMERIC_KEYS = {
     "projected_month_end_cash",
 }
 _STRING_KEYS = {"as_of", "month_label"}
-_ALL_KEYS = _NUMERIC_KEYS | _STRING_KEYS
+_BOOL_KEYS = {"has_data"}
+_ALL_KEYS = _NUMERIC_KEYS | _STRING_KEYS | _BOOL_KEYS
 
 
 # --- helpers ---------------------------------------------------------------
@@ -88,6 +89,8 @@ def test_build_forecast_returns_documented_keys_and_types():
         assert isinstance(fc[k], (int, float)) and not isinstance(fc[k], bool), (k, fc[k])
     for k in _STRING_KEYS:
         assert isinstance(fc[k], str) and fc[k], (k, fc[k])
+    for k in _BOOL_KEYS:
+        assert isinstance(fc[k], bool), (k, fc[k])
 
     # as_of is today; days_left is a sane in-month count.
     assert fc["as_of"] == date.today().isoformat()

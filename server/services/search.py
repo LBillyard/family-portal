@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 
 from server import database as db
 
@@ -222,6 +223,86 @@ def search_all(query: str, limit: int = 30) -> list[dict]:
             {"type": "bill", "title": b["name"],
              "subtitle": f"{_money(b.get('amount'))} · day {b.get('due_day')}".strip(" ·"),
              "tab": "finances", "id": b.get("id")},
+        )
+
+    # Vehicles — search name + reg + make + model (they live on the homecare tab).
+    for v in db.list_vehicles():
+        consider(
+            [v.get("name"), v.get("reg"), v.get("make"), v.get("model")],
+            {"type": "vehicle", "title": v["name"],
+             "subtitle": v.get("reg") or v.get("make") or "",
+             "tab": "homecare", "id": v.get("id")},
+        )
+
+    # Occasions — search title + person (birthdays/anniversaries on the home tab).
+    for o in db.list_occasions():
+        consider(
+            [o.get("title"), o.get("person")],
+            {"type": "occasion", "title": o["title"],
+             "subtitle": o.get("kind") or o.get("person") or "",
+             "tab": "home", "id": o.get("id")},
+        )
+
+    # Recipes — search title + tags + ingredients (recipe box on the home tab).
+    for rc in db.list_recipes():
+        consider(
+            [rc.get("title"), rc.get("tags"), rc.get("ingredients")],
+            {"type": "recipe", "title": rc["title"], "subtitle": "Recipe",
+             "tab": "home", "id": rc.get("id")},
+        )
+
+    # Wishlist / gift ideas — search title + person (home tab).
+    for w in db.list_wishlist_items():
+        consider(
+            [w.get("title"), w.get("person")],
+            {"type": "wishlist", "title": w["title"],
+             "subtitle": w.get("person") or "Gift idea",
+             "tab": "home", "id": w.get("id")},
+        )
+
+    # Home inventory — search name + brand + model + serial (homecare tab).
+    for it in db.list_inventory():
+        consider(
+            [it.get("name"), it.get("brand"), it.get("model"), it.get("serial")],
+            {"type": "inventory", "title": it["name"],
+             "subtitle": it.get("brand") or it.get("model") or it.get("category") or "",
+             "tab": "homecare", "id": it.get("id")},
+        )
+
+    # Dependents (kids/pets) — search name (homecare tab).
+    for dep in db.list_dependents():
+        consider(
+            [dep.get("name")],
+            {"type": "dependent", "title": dep["name"], "subtitle": dep.get("kind") or "",
+             "tab": "homecare", "id": dep.get("id")},
+        )
+
+    # Care items — search title (homecare tab).
+    for ci in db.list_care_items():
+        consider(
+            [ci.get("title")],
+            {"type": "care", "title": ci["title"],
+             "subtitle": ci.get("dependent_name") or ci.get("category") or "",
+             "tab": "homecare", "id": ci.get("id")},
+        )
+
+    # Chores — search title (homecare tab).
+    for ch in db.list_chores():
+        consider(
+            [ch.get("title")],
+            {"type": "chore", "title": ch["title"], "subtitle": ch.get("cadence") or "",
+             "tab": "homecare", "id": ch.get("id")},
+        )
+
+    # Meal plans (last 30 → next 30 days) — search title (home tab).
+    _today = date.today()
+    for mp in db.list_meal_plans(
+        (_today - timedelta(days=30)).isoformat(), (_today + timedelta(days=30)).isoformat()
+    ):
+        consider(
+            [mp.get("title")],
+            {"type": "meal", "title": mp["title"], "subtitle": mp.get("date") or "",
+             "tab": "home", "id": mp.get("id")},
         )
 
     scored.sort(key=lambda sr: (-sr[0], (sr[1].get("title") or "").lower()))

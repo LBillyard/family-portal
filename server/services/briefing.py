@@ -6,6 +6,7 @@ import re
 from datetime import date, datetime, timedelta
 
 from server import database as db
+from server.services import occasions as occasions_svc
 from server.services import renewals as renewals_svc
 
 
@@ -55,6 +56,7 @@ def build_briefing(user: dict | None = None, for_date: date | None = None) -> di
     due_tasks = [t for t in tasks if t.get("due") and t["due"][:10] <= (today + timedelta(days=3)).isoformat()][:5]
     renewals = renewals_svc.build_renewal_calendar(days_ahead=14)
     urgent_renewals = [r for r in renewals["items"] if r["days_until"] <= 7][:4]
+    upcoming_occasions = occasions_svc.upcoming_occasions(within_days=14)
 
     active_trips = [t for t in trips if not _trip_ended(t)]
     next_trip = next((t for t in active_trips if t.get("days_until") is not None), None)
@@ -91,6 +93,7 @@ def build_briefing(user: dict | None = None, for_date: date | None = None) -> di
         "today_appointments": today_appts,
         "due_tasks": due_tasks,
         "urgent_renewals": urgent_renewals,
+        "occasions": upcoming_occasions,
         "next_trip": next_trip,
         "open_tasks_count": len(tasks),
         "recent_activity": activities,
@@ -211,6 +214,37 @@ def whatsapp_digest_line(
     if b["urgent_renewals"]:
         sections.append("🔔 Renewing: " + ", ".join(
             f"{r['title']} ({r['days_until']}d)" for r in b["urgent_renewals"][:3]))
+
+    # Occasions (birthdays/anniversaries) in the next fortnight — a heads-up so
+    # there's time to buy a card/gift. Omitted entirely when there are none.
+    def _occ_when(iso: str) -> str:
+        try:
+            d = date.fromisoformat((iso or "")[:10])
+        except (ValueError, TypeError):
+            return ""
+        return f"{d.strftime('%a')} {d.day} {d.strftime('%b')}"
+
+    if b["occasions"]:
+        occ_bits = []
+        for o in b["occasions"][:4]:
+            when = _occ_when(o.get("next_date"))
+            occ_bits.append(f"{o['title']} ({when})" if when else o["title"])
+        sections.append("🎂 This fortnight: " + ", ".join(occ_bits))
+
+    # Money snapshot: this month's spend + outstanding bills. Guard None/zero so
+    # an empty finance picture just drops the line rather than showing £0 noise.
+    fin = b.get("finance") or {}
+    spent = fin.get("monthly_spent") or 0
+    bills_amount = fin.get("bills_due_this_month") or 0
+    unpaid_bills = [x for x in db.list_bills() if not x.get("paid")]
+    money_bits = []
+    if spent:
+        money_bits.append(f"Spent this month £{spent:,.0f}")
+    if unpaid_bills:
+        n = len(unpaid_bills)
+        money_bits.append(f"{n} bill{'s' if n != 1 else ''} due (£{bills_amount:,.0f})")
+    if money_bits:
+        sections.append("💷 " + " · ".join(money_bits))
 
     body = f"{date_str} — " + " · ".join(sections)
     return re.sub(r"\s+", " ", body).strip()[:1000]

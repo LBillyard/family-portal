@@ -47,7 +47,8 @@ def build_forecast() -> dict:
     days_in_month = calendar.monthrange(year, month)[1]
     days_left = days_in_month - today.day
 
-    # Current spendable cash = balances of NON-credit accounts (credit = debt).
+    # Current spendable cash = balances of 'current' accounts only, matching the
+    # summary card's "Current accounts" stat (savings/credit are excluded here).
     try:
         accounts = db.list_accounts()
     except Exception:
@@ -55,7 +56,7 @@ def build_forecast() -> dict:
     current_cash = 0.0
     for a in accounts:
         try:
-            if (a.get("type") or "") != "credit":
+            if (a.get("type") or "") == "current":
                 current_cash += float(a.get("balance") or 0)
         except (TypeError, ValueError):
             continue
@@ -113,6 +114,10 @@ def build_forecast() -> dict:
 
     projected_end = round(current_cash - projected_further_spend, 2)
 
+    # has_data drives the frontend empty state: True once the household has any
+    # account or any transaction to reason about.
+    has_data = bool(accounts) or bool(txns)
+
     return {
         "as_of": today.isoformat(),
         "days_left": days_left,
@@ -123,4 +128,5 @@ def build_forecast() -> dict:
         "bills_due_remaining": round(bills_due_remaining, 2),
         "projected_month_end_cash": projected_end,
         "month_label": f"{_MONTH_NAMES[month - 1]} {year}",
+        "has_data": has_data,
     }

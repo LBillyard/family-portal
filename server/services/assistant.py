@@ -16,6 +16,7 @@ from server.services import openrouter
 from server.services import activity as activity_log
 from server.services import briefing as briefing_svc
 from server.services import memory as mem_svc
+from server.services import occasions as occasions_svc
 from server.services import search as search_svc
 from server.services import trips as trips_svc
 
@@ -473,6 +474,90 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_occasion",
+            "description": "Add a birthday, anniversary or other yearly occasion (recurs annually).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["birthday", "anniversary", "other"]},
+                    "date": {"type": "string", "description": "YYYY-MM-DD (the original/birth date)"},
+                    "person": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["title", "kind", "date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_upcoming_occasions",
+            "description": "List upcoming birthdays/anniversaries within N days, with countdowns.",
+            "parameters": {
+                "type": "object",
+                "properties": {"within_days": {"type": "integer", "default": 30}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_vehicle_renewals",
+            "description": "Upcoming vehicle MOT/tax/insurance/service renewals due within 60 days.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_care_due",
+            "description": "Care items (kids'/pets' health & care schedule) due within N days.",
+            "parameters": {
+                "type": "object",
+                "properties": {"within_days": {"type": "integer", "default": 30}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_shopping_list",
+            "description": "Get the shared household shopping list (all items, done and not).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_meal_plan",
+            "description": "Get the planned dinners for the next N days (the meal planner).",
+            "parameters": {
+                "type": "object",
+                "properties": {"days": {"type": "integer", "default": 7}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_wishlist_item",
+            "description": "Add a gift idea to someone's wishlist.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "person": {"type": "string"},
+                    "price": {"type": "number"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["title"],
+            },
+        },
+    },
 ]
 
 
@@ -591,6 +676,22 @@ def build_context(user: dict) -> str:
     tasks = [t for t in db.list_tasks() if not t.get("done")][:8]
     trips = db.list_trips()
     summary = db.finance_summary()
+    # Wave-14 entities — kept COMPACT (titles/dates only) so the context stays small.
+    occasions_soon = [
+        {"title": o["title"], "person": o.get("person"), "next_date": o.get("next_date"), "days_until": o.get("days_until")}
+        for o in occasions_svc.upcoming_occasions(30)
+    ]
+    vehicle_renewals = [
+        {"name": v["name"], "kind": v["kind"], "due_date": v["due_date"]}
+        for v in db.vehicles_due_within(30)
+    ]
+    care_soon = [
+        {"title": c["title"], "who": c.get("dependent_name"), "due_date": c.get("due_date")}
+        for c in db.care_due_within(30)
+    ]
+    week_end = (date.today() + timedelta(days=7)).isoformat()
+    this_week_meals = [{"date": m["date"], "title": m["title"]} for m in db.list_meal_plans(today, week_end)]
+    open_shopping = [s["text"] for s in db.list_shopping_items() if not s.get("done")]
     return json.dumps(
         {
             "today": today,
@@ -601,6 +702,11 @@ def build_context(user: dict) -> str:
             "open_tasks": tasks,
             "holiday_trips": trips[:5],
             "finance_summary": summary,
+            "upcoming_occasions": occasions_soon,
+            "vehicle_renewals": vehicle_renewals,
+            "care_due": care_soon,
+            "this_week_meals": this_week_meals,
+            "open_shopping": open_shopping,
         },
         default=str,
     )
@@ -886,6 +992,42 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
         if name == "plan_meal":
             meal = db.upsert_meal_plan(args["date"], args["title"], args.get("ingredients") or "")
             return {"ok": True, "meal": meal}
+        if name == "create_occasion":
+            occ = db.create_occasion(
+                {
+                    "title": args["title"],
+                    "kind": args.get("kind", "birthday"),
+                    "date": args["date"],
+                    "person": args.get("person"),
+                    "notes": args.get("notes"),
+                }
+            )
+            return {"ok": True, "occasion": occ}
+        if name == "list_upcoming_occasions":
+            within = int(args.get("within_days") or 30)
+            return {"occasions": occasions_svc.upcoming_occasions(within)}
+        if name == "list_vehicle_renewals":
+            return {"renewals": db.vehicles_due_within(60)}
+        if name == "list_care_due":
+            within = int(args.get("within_days") or 30)
+            return {"care_due": db.care_due_within(within)}
+        if name == "get_shopping_list":
+            return {"items": db.list_shopping_items()}
+        if name == "get_meal_plan":
+            days = int(args.get("days") or 7)
+            today = date.today()
+            end = (today + timedelta(days=days)).isoformat()
+            return {"meals": db.list_meal_plans(today.isoformat(), end)}
+        if name == "add_wishlist_item":
+            item = db.create_wishlist_item(
+                {
+                    "title": args["title"],
+                    "person": args.get("person"),
+                    "price": args.get("price"),
+                    "notes": args.get("notes"),
+                }
+            )
+            return {"ok": True, "wishlist_item": item}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)

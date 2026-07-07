@@ -1557,20 +1557,24 @@ def set_transaction_person(txn_id: str, person: Optional[str]) -> Optional[dict]
 
 def spend_by_person(month: Optional[str] = None) -> list[dict]:
     """Spend (ABS of outgoings) grouped by person for a 'YYYY-MM' month.
-    Defaults to the latest month present in the ledger, else the current month.
-    Excludes hidden rows. Persons with no spend are omitted; sorted amount desc."""
+    Defaults to the CURRENT CALENDAR month, matching the summary/insights spend
+    basis. Excludes hidden rows and internal shuffles (NON_SPEND_CATEGORIES).
+    Persons with no spend are omitted; sorted amount desc."""
+    from server.services import categorize as cz
+
+    excluded = sorted(cz.NON_SPEND_CATEGORIES)
     with get_conn() as conn:
         if not month:
-            latest = conn.execute("SELECT MAX(txn_date) FROM transactions").fetchone()[0]
-            month = latest[:7] if latest else date.today().strftime("%Y-%m")
+            month = date.today().strftime("%Y-%m")
         rows = conn.execute(
-            """SELECT COALESCE(person, 'unassigned') AS person,
+            f"""SELECT COALESCE(person, 'unassigned') AS person,
                       COALESCE(SUM(ABS(amount)), 0) AS spent
                FROM transactions
                WHERE hidden = 0 AND amount < 0 AND txn_date LIKE ?
+                 AND category NOT IN ({','.join('?' * len(excluded))})
                GROUP BY COALESCE(person, 'unassigned')
                ORDER BY spent DESC""",
-            (f"{month}%",),
+            (f"{month}%", *excluded),
         ).fetchall()
         return [{"person": r["person"], "amount": round(r["spent"], 2)} for r in rows if r["spent"]]
 

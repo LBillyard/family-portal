@@ -3,12 +3,15 @@
 Everything here is computed in Python from the raw ledger so the frontend gets a
 ready-to-render snapshot: this month vs last month, the biggest single expense,
 top spend categories, and the household subscription load. The "current" month is
-taken from the most recent transaction present in the data (NOT today's clock) —
-bank feeds and CSV imports often lag, so anchoring to the data keeps the headline
-figures meaningful even when the calendar has ticked over.
+the CURRENT CALENDAR month (today's clock), so every spend figure across the
+finance page shares one basis. Internal shuffles (Transfers/Savings/Crypto/Income
+— the NON_SPEND_CATEGORIES set) are excluded everywhere spend or income is summed,
+so the headline matches the summary card and the per-person breakdown.
 """
 
 from __future__ import annotations
+
+import datetime
 
 from server import database as db
 
@@ -51,7 +54,7 @@ def _empty_month(label: str = "") -> dict:
 
 def _subscription_summary() -> dict:
     """Count and monthly/annual spend for active subscriptions (ignored excluded)."""
-    subs = [s for s in db.list_subscriptions(include_ignored=False) if (s.get("status") or "") != "ignored"]
+    subs = [s for s in db.list_subscriptions(include_ignored=False) if (s.get("status") or "") not in ("ignored", "lapsed")]
     monthly = 0.0
     for s in subs:
         amount = abs(float(s.get("amount") or 0))
@@ -69,16 +72,25 @@ def _subscription_summary() -> dict:
 
 
 def _month_totals(txns: list[dict], key: str) -> dict:
+    from server.services.categorize import NON_SPEND_CATEGORIES
+
+    # Spend excludes all non-spend buckets (Income/Transfers/Savings/Crypto). Income
+    # keeps the "Income" category (salary/wages) but still drops internal shuffles —
+    # mirrors finance_summary so the figures agree across cards.
+    income_exclude = NON_SPEND_CATEGORIES - {"Income"}
     spend = 0.0
     income = 0.0
     for t in txns:
         if _txn_month(t) != key:
             continue
+        cat = t.get("category") or ""
         amount = t.get("amount") or 0
         if amount < 0:
-            spend += abs(amount)
+            if cat not in NON_SPEND_CATEGORIES:
+                spend += abs(amount)
         elif amount > 0:
-            income += amount
+            if cat not in income_exclude:
+                income += amount
     return {"label": _label(key), "spend": round(spend, 2), "income": round(income, 2)}
 
 
@@ -93,22 +105,19 @@ def _month_abbrev(month_key: str) -> str:
 def build_spend_trend(months: int = 6) -> dict:
     """Spend per calendar month for the last `months` months.
 
-    The window ends at the latest month present in the data (so it lines up with the
-    insights headline, which also anchors to the data rather than the clock), falling
-    back to today's month when there are no transactions. Every month in the window is
-    included — even zero-spend months — so the chart has an even axis. Spend is the sum
-    of outgoing amounts (amount < 0) per month, as a positive figure rounded to 2dp.
+    The window ends at the CURRENT CALENDAR month (today's clock), so it lines up with
+    the insights headline and the summary card — all of which anchor to the current
+    month rather than the latest month present in the data. Every month in the window
+    is included — even zero-spend months — so the chart has an even axis. Spend is the
+    sum of outgoing amounts (amount < 0) per month, excluding internal shuffles
+    (NON_SPEND_CATEGORIES), as a positive figure rounded to 2dp.
     """
+    from server.services.categorize import NON_SPEND_CATEGORIES
+
     months = max(1, int(months))
     txns = db.list_transactions_for_analysis(limit=1000)
 
-    present = sorted({m for m in (_txn_month(t) for t in txns) if m})
-    if present:
-        anchor = present[-1]
-    else:
-        from datetime import date
-
-        anchor = date.today().isoformat()[:7]
+    anchor = datetime.date.today().strftime("%Y-%m")
 
     # Build the ordered window of month keys ending at the anchor (oldest → newest).
     keys: list[str] = [anchor]
@@ -121,6 +130,8 @@ def build_spend_trend(months: int = 6) -> dict:
     for t in txns:
         key = _txn_month(t)
         if key not in window:
+            continue
+        if (t.get("category") or "") in NON_SPEND_CATEGORIES:
             continue
         amount = t.get("amount") or 0
         if amount < 0:
@@ -135,6 +146,8 @@ def build_spend_trend(months: int = 6) -> dict:
 
 
 def build_insights() -> dict:
+    from server.services.categorize import NON_SPEND_CATEGORIES
+
     txns = db.list_transactions_for_analysis(limit=1000)
     if not txns:
         return {
@@ -147,10 +160,10 @@ def build_insights() -> dict:
             "has_data": False,
         }
 
-    # Anchor "this month" to the latest month present in the data, not the clock.
-    months = sorted({m for m in (_txn_month(t) for t in txns) if m})
-    this_key = months[-1] if months else ""
-    last_key = _prev_month_key(this_key) if this_key else ""
+    # Anchor "this month" to the CURRENT CALENDAR month (today's clock), not the
+    # latest month present in the data, so every spend figure shares one basis.
+    this_key = datetime.date.today().strftime("%Y-%m")
+    last_key = _prev_month_key(this_key)
 
     this_month = _month_totals(txns, this_key)
     last_month = _month_totals(txns, last_key)
@@ -161,12 +174,15 @@ def build_insights() -> dict:
             (this_month["spend"] - last_month["spend"]) / last_month["spend"] * 100, 2
         )
 
-    # This month's spend by category + the single biggest expense.
+    # This month's spend by category + the single biggest expense. Internal shuffles
+    # (NON_SPEND_CATEGORIES) are excluded so this matches the summary/by-person basis.
     cat_totals: dict[str, float] = {}
     biggest = None
     biggest_amt = -1.0
     for t in txns:
         if _txn_month(t) != this_key:
+            continue
+        if (t.get("category") or "") in NON_SPEND_CATEGORIES:
             continue
         amount = t.get("amount") or 0
         if amount >= 0:

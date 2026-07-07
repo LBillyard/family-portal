@@ -147,9 +147,20 @@ def test_assets_routes(client):
 # --- insights --------------------------------------------------------------
 
 def test_insights_this_vs_last_month(monkeypatch):
-    # Anchor the data to fixed months so the "latest month in data" logic is deterministic.
+    # build_insights now anchors to the CURRENT CALENDAR month (today's clock). Freeze
+    # insights' clock to a fixed far-future month so the seed data is isolated from the
+    # shared session DB (no other test writes txns in 2099) and the assertions stay
+    # deterministic.
     this_m = "2099-08"
     last_m = "2099-07"
+
+    class _FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2099, 8, 15)
+
+    monkeypatch.setattr(insights_svc.datetime, "date", _FixedDate)
+
     acc = _ensure_account("W3 Insights", "current", 0.0)
     db.create_transaction({"account_id": acc, "description": "Groceries A", "category": "Groceries",
                            "amount": -100.0, "date": f"{last_m}-10"})
@@ -164,6 +175,8 @@ def test_insights_this_vs_last_month(monkeypatch):
     assert ins["has_data"] is True
     assert ins["this_month"]["label"] == "Aug 2099"
     assert ins["this_month"]["spend"] == 450.0        # 400 + 50
+    # The "Income" category IS income — it's excluded from SPEND but kept for the income
+    # figure (matches finance_summary); only Transfers/Savings/Crypto are dropped from income.
     assert ins["this_month"]["income"] == 3000.0
     assert ins["last_month"]["spend"] == 100.0
     # 450 vs 100 → +350%

@@ -1999,7 +1999,7 @@ async function loadForecast() {
 function renderForecast(d) {
   const el = document.getElementById('finance-forecast');
   if (!el) return;
-  if (!d) {
+  if (!d || d.has_data === false) {
     el.innerHTML = '<p class="hint-small">Not enough data yet — log some transactions to project your month-end balance.</p>';
     return;
   }
@@ -2932,9 +2932,6 @@ function renderHolidays(data, filter = tripFilter) {
       const checklist = (t.checklist || [])
         .map((c) => `<li class="wf-action${c.done ? ' done' : ''}" data-action="toggle-checklist" data-trip-id="${t.id}" data-item-id="${esc(c.id ?? c.label)}" style="cursor:pointer" title="Tap to toggle"><span class="checklist-box">${c.done ? '✓' : ''}</span>${esc(c.label)}</li>`)
         .join('');
-      const bookings = (t.bookings || [])
-        .map((b) => `<a href="#" class="booking-link wf-action" data-action="view-booking"><span>${esc(b.type)}: ${esc(b.ref)}</span><span>→</span></a>`)
-        .join('');
       const budgetPct = t.budget ? Math.round((t.spent / t.budget) * 100) : 0;
       return `
       <article class="holiday-card">
@@ -2950,7 +2947,6 @@ function renderHolidays(data, filter = tripFilter) {
           ${checklist ? `<ul class="checklist">${checklist}</ul>` : ''}
           ${(t.packing || []).length ? `<p style="font-size:0.75rem;color:var(--text-muted);margin-top:8px">📦 ${t.packing.filter((p) => !p.done).length} packing items left</p>` : ''}
           ${t.media_count ? `<p style="font-size:0.75rem;color:var(--text-muted)">📷 ${t.media_count} photos</p>` : ''}
-          ${bookings ? `<div class="booking-links">${bookings}</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             <button class="btn btn-sm btn-primary wf-action" data-action="view-trip" data-trip-id="${t.id}">Details</button>
             <button class="btn btn-sm btn-soft wf-action" data-action="toggle-itinerary" data-trip-id="${t.id}" id="itin-toggle-${t.id}">🗓️ Itinerary</button>
@@ -6902,8 +6898,9 @@ function markSectionFailed(key) {
     const el = document.getElementById(id);
     if (!el) return;
     const msg = 'Couldn’t load this section — try refreshing.';
+    const cols = el.closest('table')?.querySelectorAll('thead th').length || 6;
     el.innerHTML = el.tagName === 'TBODY'
-      ? `<tr><td colspan="8" class="hint-small">${msg}</td></tr>`
+      ? `<tr><td colspan="${cols}" class="hint-small">${msg}</td></tr>`
       : `<p class="hint-small">${msg}</p>`;
   });
 }

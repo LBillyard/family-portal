@@ -129,7 +129,11 @@ async def run_reminders() -> dict:
             if not dt:
                 continue
             days_until = (dt.date() - today).days
-            if not (0 <= days_until <= lead):  # today..lead days ahead only
+            # Each appointment carries its own reminder_days (UI: "Reminder Nd before",
+            # schema default 2); honour it instead of the global lead.
+            _rd = a.get("reminder_days")
+            appt_lead = max(0, int(_rd)) if _rd is not None else lead  # 0 = remind on the day only
+            if not (0 <= days_until <= appt_lead):  # today..appt_lead days ahead only
                 continue
             checked += 1
             key = f"appt:{a['id']}"
@@ -172,14 +176,15 @@ async def run_reminders() -> dict:
                 _push(bill["name"], body, badge=alerts)
                 db.mark_notified(key)
 
-    # --- Renewals: subscriptions & maintenance from the renewal calendar. Bills and
-    #     documents are intentionally excluded here — they have their own toggles above
-    #     (bill_reminders) and below (document_expiry_reminders), so counting them again
-    #     would double-remind the household. Reminds the whole household. ---
+    # --- Renewals: subscriptions & maintenance from the renewal calendar. Bills,
+    #     documents, vehicles and care are intentionally excluded here — each has its
+    #     own reminder block (bills above, documents below, vehicles + care in their
+    #     own blocks further down), so counting them here would double-remind the
+    #     household. Reminds the whole household. ---
     if prefs.get("renewal_reminders"):
         cal = renewals_svc.build_renewal_calendar(days_ahead=lead)
         for item in cal.get("items", []):
-            if item.get("type") in ("bill", "document"):
+            if item.get("type") in ("bill", "document", "vehicle", "care"):
                 continue
             days_until = item.get("days_until")
             if days_until is None or not (0 <= days_until <= lead):

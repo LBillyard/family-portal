@@ -116,6 +116,49 @@ def build_renewal_calendar(days_ahead: int = 90) -> dict:
             }
         )
 
+    for v in db.vehicles_due_within(days_ahead):
+        try:
+            due = date.fromisoformat(str(v["due_date"])[:10])
+        except (ValueError, TypeError):
+            continue
+        if due > cutoff:
+            continue
+        items.append(
+            {
+                "id": f"vehicle-{v['vehicle_id']}-{v['kind']}",
+                "source_id": v["vehicle_id"],
+                "type": "vehicle",
+                "title": f"{v['name']} — {v['kind']}",
+                "date": due.isoformat(),
+                "days_until": (due - today).days,
+                "category": "Vehicles",
+                "status": "due" if due <= today else "upcoming",
+                "detail": v.get("reg") or "",
+            }
+        )
+
+    for c in db.care_due_within(days_ahead):
+        try:
+            due = date.fromisoformat(str(c["due_date"])[:10])
+        except (ValueError, TypeError):
+            continue
+        if due > cutoff:
+            continue
+        who = c.get("dependent_name") or ""
+        items.append(
+            {
+                "id": f"care-{c['id']}",
+                "source_id": c["id"],
+                "type": "care",
+                "title": f"{who}: {c['title']}" if who else c["title"],
+                "date": due.isoformat(),
+                "days_until": (due - today).days,
+                "category": c.get("category") or "Care",
+                "status": "due" if due <= today else "upcoming",
+                "detail": c.get("notes") or "",
+            }
+        )
+
     items.sort(key=lambda x: (x["days_until"], x["title"]))
     overdue = [i for i in items if i["days_until"] < 0]
     this_month = [i for i in items if 0 <= i["days_until"] <= 30]
