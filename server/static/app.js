@@ -2558,6 +2558,130 @@ function renderInventory(items) {
     : '<div class="vault-empty"><p>No items yet</p><p class="hint-small">Add appliances, electronics and valuables to track warranties and keep records for insurance.</p></div>';
 }
 
+// --- Home care: Vehicles ----------------------------------------------------
+// Own endpoint (/api/vehicles). Mirrors the Home-inventory card exactly: a card
+// of .maintenance-row rows with inline add/edit/delete + date-status pills.
+// Each vehicle shows FOUR due-date pills (MOT / Tax / Insurance / Service) via
+// the shared duePill() helper, plus an optional DVLA reg lookup on both forms.
+
+// Date-status pill for a vehicle renewal. No date → muted; past → red overdue;
+// within 30 days → amber "due {date}"; else → green "{date}". Colours are all
+// semantic vars via the .due-pill.* classes so it reads correctly in dark mode.
+function duePill(label, dateStr) {
+  const safe = esc(label);
+  if (!dateStr) return `<span class="due-pill none">${safe} —</span>`;
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return `<span class="due-pill none">${safe} —</span>`;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(y, m - 1, d);
+  const days = Math.round((due - today) / 86400000);
+  if (days < 0) return `<span class="due-pill overdue">${safe} overdue</span>`;
+  if (days <= 30) return `<span class="due-pill soon">${safe} due ${fmtShortDate(dateStr)}</span>`;
+  return `<span class="due-pill ok">${safe} ${fmtShortDate(dateStr)}</span>`;
+}
+
+async function loadVehicles() {
+  const list = document.getElementById('vehicles-list');
+  if (!list) return;
+  try {
+    const data = await api('/vehicles');
+    store.vehicles = data.vehicles || [];
+    renderVehicles(store.vehicles);
+  } catch {
+    list.innerHTML = '<div class="vault-empty"><p>Couldn\'t load vehicles.</p></div>';
+  }
+}
+
+function findVehicle(id) {
+  return (store.vehicles || []).find((v) => String(v.id) === String(id));
+}
+
+// Build a create/update payload from the inline row's fields (shared by add + edit).
+function vehiclePayload(f) {
+  return {
+    name: (f.name || '').trim(),
+    reg: (f.reg || '').trim() || null,
+    make: (f.make || '').trim() || null,
+    model: (f.model || '').trim() || null,
+    mot_due: f.mot_due || null,
+    tax_due: f.tax_due || null,
+    insurance_due: f.insurance_due || null,
+    service_due: f.service_due || null,
+    notes: (f.notes || '').trim() || null,
+  };
+}
+
+function vehicleRowInner(v) {
+  const mm = [v.make, v.model].filter(Boolean).join(' ');
+  return `
+        <div class="inventory-main">
+          <div class="inventory-title">${esc(v.name)}${v.reg ? `<span class="veh-reg">${esc(v.reg)}</span>` : ''}</div>
+          ${mm ? `<div class="subscription-meta"><span>${esc(mm)}</span></div>` : ''}
+          <div class="veh-pills">
+            ${duePill('MOT', v.mot_due)}
+            ${duePill('Tax', v.tax_due)}
+            ${duePill('Insurance', v.insurance_due)}
+            ${duePill('Service', v.service_due)}
+          </div>
+          ${v.notes ? `<p class="hint-small">${esc(v.notes)}</p>` : ''}
+        </div>
+        <div class="inventory-side">
+          <button class="bill-edit-btn wf-action" data-action="edit-vehicle" data-veh-id="${v.id}" title="Edit vehicle" aria-label="Edit vehicle">✎</button>
+        </div>`;
+}
+
+// Shared field markup for the inline add + edit forms. Both use a .row-edit root
+// so the reg-lookup handler can find its fields the same way for either form.
+function vehicleFields(v) {
+  return `
+      <div class="row-edit-fields">
+        <label>Reg<input type="text" data-f="reg" value="${esc(v.reg || '')}" placeholder="e.g. AB12 CDE"></label>
+        <label>Make<input type="text" data-f="make" value="${esc(v.make || '')}" placeholder="e.g. Volkswagen"></label>
+        <label>Model<input type="text" data-f="model" value="${esc(v.model || '')}" placeholder="e.g. Golf"></label>
+        <label>MOT due<input type="date" data-f="mot_due" value="${esc((v.mot_due || '').slice(0, 10))}"></label>
+        <label>Tax due<input type="date" data-f="tax_due" value="${esc((v.tax_due || '').slice(0, 10))}"></label>
+        <label>Insurance due<input type="date" data-f="insurance_due" value="${esc((v.insurance_due || '').slice(0, 10))}"></label>
+        <label>Service due<input type="date" data-f="service_due" value="${esc((v.service_due || '').slice(0, 10))}"></label>
+        <label>Notes<input type="text" data-f="notes" value="${esc(v.notes || '')}"></label>
+      </div>`;
+}
+
+function vehicleEditInner(v) {
+  return `
+    <div class="row-edit" data-veh-id="${v.id}">
+      <input type="text" class="te-input" data-f="name" value="${esc(v.name)}" placeholder="Name (e.g. Laura's Golf)">
+      ${vehicleFields(v)}
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-vehicle-inline" data-veh-id="${v.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-vehicle-inline" data-veh-id="${v.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="lookup-vehicle">Look up from reg ↺</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-vehicle" data-veh-id="${v.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function vehicleAddInner() {
+  return `
+    <div class="row-edit" id="vehicle-add-form">
+      <input type="text" class="te-input" data-f="name" placeholder="Name (e.g. Laura's Golf)">
+      ${vehicleFields({})}
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-vehicle-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="vehicles-list">Cancel</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="lookup-vehicle">Look up from reg ↺</button>
+      </div>
+    </div>`;
+}
+
+function renderVehicles(items) {
+  const el = document.getElementById('vehicles-list');
+  if (!el) return;
+  el.innerHTML = (items && items.length)
+    ? items.map((v) => `<div class="maintenance-row" data-veh-id="${v.id}">${vehicleRowInner(v)}</div>`).join('')
+    : '<div class="vault-empty"><p>No vehicles yet</p><p class="hint-small">Add your cars to track MOT, tax, insurance and servicing (and get a reminder before each is due).</p></div>';
+}
+
 function renderAppointments(data, filter = 'all', category = 'all') {
   const { users, appointments } = data;
   let filtered = appointments.filter((a) => filter === 'all' || a.status === filter);
@@ -5425,6 +5549,93 @@ function initActions() {
       return;
     }
 
+    // --- Vehicles (home care card) -------------------------------------------
+    if (action === 'add-vehicle') {
+      const host = document.getElementById('vehicles-list');
+      if (host && !document.getElementById('vehicle-add-form')) {
+        host.insertAdjacentHTML('afterbegin', vehicleAddInner());
+        document.querySelector('#vehicle-add-form [data-f="name"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-vehicle-new') {
+      const f = readInlineFields(document.getElementById('vehicle-add-form'));
+      if (!f.name || !f.name.trim()) { showToast('Vehicle needs a name', true); return; }
+      btn.disabled = true;
+      api('/vehicles', {
+        method: 'POST',
+        body: JSON.stringify(vehiclePayload(f)),
+      }).then(() => loadVehicles()).then(() => showToast('Vehicle added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-vehicle') {
+      const row = btn.closest('.maintenance-row');
+      const v = findVehicle(btn.dataset.vehId);
+      if (row && v) { row.classList.add('editing'); row.innerHTML = vehicleEditInner(v); row.querySelector('[data-f="name"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-vehicle-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.name || !f.name.trim()) { showToast('Vehicle needs a name', true); return; }
+      api(`/vehicles/${btn.dataset.vehId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(vehiclePayload(f)),
+      }).then(() => loadVehicles()).then(() => showToast('Vehicle updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-vehicle-inline') {
+      const row = btn.closest('.maintenance-row');
+      const v = findVehicle(btn.dataset.vehId);
+      if (row && v) { row.classList.remove('editing'); row.innerHTML = vehicleRowInner(v); }
+      return;
+    }
+    if (action === 'delete-vehicle') {
+      if (!confirm('Delete this vehicle?')) return;
+      api(`/vehicles/${btn.dataset.vehId}`, { method: 'DELETE' })
+        .then(() => loadVehicles()).then(() => showToast('Vehicle deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    // DVLA reg lookup — shared by both the add + edit forms (both use .row-edit).
+    // Reads the form's reg, POSTs /vehicles/lookup, then fills make / mot_due /
+    // tax_due. Never crashes on an unexpected response shape.
+    if (action === 'lookup-vehicle') {
+      const root = btn.closest('.row-edit');
+      if (!root) return;
+      const reg = (root.querySelector('[data-f="reg"]')?.value || '').trim();
+      if (!reg) { showToast('Enter a registration first'); return; }
+      btn.disabled = true;
+      api('/vehicles/lookup', { method: 'POST', body: JSON.stringify({ reg }) })
+        .then((res) => {
+          res = res || {};
+          if (res.configured === false) { showToast(res.message || 'Reg lookup needs a DVLA key'); return; }
+          if (res.error) { showToast(res.error); return; }
+          if (res.make == null && res.mot_due == null && res.tax_due == null) {
+            showToast('Vehicle not found for that reg');
+            return;
+          }
+          const setField = (name, val, isDate) => {
+            const el = root.querySelector(`[data-f="${name}"]`);
+            if (!el || val == null || val === '') return;
+            el.value = isDate ? String(val).slice(0, 10) : String(val);
+          };
+          setField('make', res.make, false);
+          setField('mot_due', res.mot_due, true);
+          setField('tax_due', res.tax_due, true);
+          showToast('Filled from DVLA');
+        })
+        .catch((err) => {
+          const msg = (err && err.message) || '';
+          if (/not found/i.test(msg) || /404/.test(msg)) showToast('Vehicle not found for that reg');
+          else showToast(msg || 'Reg lookup failed', true);
+        })
+        .finally(() => { btn.disabled = false; });
+      return;
+    }
+
     // --- Gift ideas / wishlists (home card) ----------------------------------
     if (action === 'add-wishlist') {
       const host = document.getElementById('wishlist-list');
@@ -6556,6 +6767,7 @@ async function load() {
   renderTradespeople(tradespeople || { tradespeople: [] });
   loadChores();     // Home care → Chores rotation card (own endpoint)
   loadInventory();  // Home care → Home inventory / warranty card (own endpoint)
+  loadVehicles();   // Home care → Vehicles card: MOT/tax/insurance/service (own endpoint)
   loadDependents(); // Home care → Little ones card: dependents + care items (own endpoints)
   if (appointments) renderAppointments(appointments);
   if (holidays) renderHolidays(holidays);

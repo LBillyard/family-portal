@@ -23,7 +23,7 @@ from server.services import finance_merge, notifications as notify_svc, receipts
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
 from server.services import weather as weather_svc, gmail_receipts, push as push_svc
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
-from server.services import insights, networth, occasions
+from server.services import insights, networth, occasions, vehicles as vehicles_svc
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
@@ -82,6 +82,8 @@ from shared.schemas import (
     TripCreate,
     TripPackingRequest,
     TripUpdate,
+    VehicleCreate,
+    VehicleUpdate,
     WishlistCreate,
     WishlistUpdate,
 )
@@ -1909,6 +1911,56 @@ def delete_inventory_route(item_id: str, _: dict = Depends(require_user)):
     if not db.delete_inventory_item(item_id):
         raise HTTPException(status_code=404, detail="Inventory item not found")
     return {"ok": True}
+
+
+# --- Vehicles (cars & their MOT/tax/insurance/service renewals) ---
+
+@router.get("/vehicles")
+def api_vehicles(_: dict = Depends(require_user)):
+    return {"vehicles": db.list_vehicles()}
+
+
+@router.post("/vehicles")
+def create_vehicle_route(body: VehicleCreate, _: dict = Depends(require_user)):
+    if not (body.name or "").strip():
+        raise HTTPException(status_code=400, detail="Vehicle name is required")
+    return {"vehicle": db.create_vehicle(body.model_dump())}
+
+
+@router.patch("/vehicles/{vehicle_id}")
+def update_vehicle_route(vehicle_id: str, body: VehicleUpdate, _: dict = Depends(require_user)):
+    vehicle = db.update_vehicle(vehicle_id, body.model_dump(exclude_unset=True))
+    if vehicle is None:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    return {"vehicle": vehicle}
+
+
+@router.delete("/vehicles/{vehicle_id}")
+def delete_vehicle_route(vehicle_id: str, _: dict = Depends(require_user)):
+    if not db.delete_vehicle(vehicle_id):
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    return {"ok": True}
+
+
+@router.post("/vehicles/lookup")
+async def vehicle_lookup_route(reg: str = Body(..., embed=True), _: dict = Depends(require_user)):
+    """Auto-fill a vehicle from its number plate via the optional DVLA lookup.
+
+    Dormant without a key: returns {"configured": False} with a helpful message so
+    the UI can point the user at DVLA_API_KEY rather than erroring."""
+    if not vehicles_svc.is_lookup_configured():
+        return {
+            "configured": False,
+            "message": "Reg lookup isn't set up — add a free DVLA API key (DVLA_API_KEY) to enable auto-fill.",
+        }
+    try:
+        result = await vehicles_svc.lookup_reg(reg)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    except RuntimeError as exc:
+        # Keep the UI non-crashing: surface the message at 200 so it can be shown inline.
+        return {"configured": True, "error": str(exc)}
+    return {"configured": True, **result}
 
 
 # --- Recipes (household recipe book, plans into the meal planner) ---

@@ -483,3 +483,27 @@ class WishlistUpdate(BaseModel):
     notes: Optional[str] = None
     purchased: Optional[bool] = None
 
+
+class VehicleCreate(BaseModel):
+    name: str
+    reg: Optional[str] = None
+    make: Optional[str] = None
+    model: Optional[str] = None
+    mot_due: Optional[str] = None
+    tax_due: Optional[str] = None
+    insurance_due: Optional[str] = None
+    service_due: Optional[str] = None
+    notes: Optional[str] = ""
+
+
+class VehicleUpdate(BaseModel):
+    name: Optional[str] = None
+    reg: Optional[str] = None
+    make: Optional[str] = None
+    model: Optional[str] = None
+    mot_due: Optional[str] = None
+    tax_due: Optional[str] = None
+    insurance_due: Optional[str] = None
+    service_due: Optional[str] = None
+    notes: Optional[str] = None
+

@@ -349,4 +349,26 @@ async def run_reminders() -> dict:
                 _push("Budget alert", body, badge=alerts)
                 db.mark_notified(key)
 
+    # --- Vehicle renewals: MOT / tax / insurance / service falling due. These are
+    #     renewals, so gate them under the same renewal_reminders toggle. One entry
+    #     per due field per vehicle; the due date is in the key so it fires once per
+    #     cycle and re-fires next cycle. Reminds the whole household. ---
+    if prefs.get("renewal_reminders"):
+        for v in db.vehicles_due_within(lead):
+            checked += 1
+            key = f"vehicle:{v['vehicle_id']}:{v['kind']}:{v.get('due_date')}"
+            if db.was_notified(key):
+                continue
+            try:
+                when = _fmt_date(date.fromisoformat(str(v.get('due_date'))[:10]))
+            except (TypeError, ValueError):
+                when = "soon"
+            reg = f" ({v['reg']})" if v.get('reg') else ""
+            body = f"🚗 {v['name']}{reg} — {v['kind']} due {when}"
+            if await _remind_household(_household(), body):
+                sent += len(_household())
+                alerts += 1
+                _push("Vehicle renewal", body, badge=alerts)
+                db.mark_notified(key)
+
     return {"sent": sent, "checked": checked}

@@ -5179,6 +5179,43 @@ dialog select:focus {
 .warranty-pill.none { color: var(--text-muted); }
 
 /* -------------------------------------------------------------------------- */
+/* Home care — Vehicles                                                        */
+/* Reuses .maintenance-row + .row-edit + .inventory-main/.inventory-side. Four  */
+/* due-date pills (MOT / Tax / Insurance / Service) + a subtle monospace reg    */
+/* badge. All colours from semantic vars so it reads correctly in dark mode.   */
+/* -------------------------------------------------------------------------- */
+.veh-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.due-pill {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.due-pill.overdue { background: var(--red-bg); color: var(--red); }
+.due-pill.soon { background: var(--amber-bg); color: var(--amber); }
+.due-pill.ok { background: var(--green-bg); color: var(--green); }
+.due-pill.none { background: var(--surface-muted); color: var(--text-muted); }
+
+.veh-reg {
+  font-family: ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 8px;
+  border-radius: 5px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Home — Gift ideas / wishlists                                              */
 /* Grouped by person; reuses .maintenance-row + .row-edit. Purchased items    */
 /* read muted + struck-through. All colours from semantic vars (dark-safe).   */

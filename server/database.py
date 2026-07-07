@@ -460,6 +460,22 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Household vehicles with MOT/tax/insurance/service due dates.
+            CREATE TABLE IF NOT EXISTS vehicles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                reg TEXT,
+                make TEXT,
+                model TEXT,
+                mot_due TEXT,
+                tax_due TEXT,
+                insurance_due TEXT,
+                service_due TEXT,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -4010,3 +4026,136 @@ def delete_wishlist_item(item_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM wishlist_items WHERE id = ?", (item_id,))
         return cur.rowcount > 0
+
+
+# --- Vehicles (MOT/tax/insurance/service tracker) ---
+
+def _vehicle_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "reg": r.get("reg"),
+        "make": r.get("make"),
+        "model": r.get("model"),
+        "mot_due": r.get("mot_due"),
+        "tax_due": r.get("tax_due"),
+        "insurance_due": r.get("insurance_due"),
+        "service_due": r.get("service_due"),
+        "notes": r["notes"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_vehicles() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM vehicles ORDER BY name").fetchall()
+        return [_vehicle_out(row_to_dict(r)) for r in rows]
+
+
+def get_vehicle(vehicle_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM vehicles WHERE id = ?", (vehicle_id,)).fetchone()
+        return _vehicle_out(row_to_dict(row)) if row else None
+
+
+def create_vehicle(data: dict) -> dict:
+    vid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO vehicles
+                   (id, name, reg, make, model, mot_due, tax_due, insurance_due, service_due, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                vid,
+                data["name"].strip(),
+                data.get("reg"),
+                data.get("make"),
+                data.get("model"),
+                data.get("mot_due"),
+                data.get("tax_due"),
+                data.get("insurance_due"),
+                data.get("service_due"),
+                data.get("notes") or "",
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM vehicles WHERE id = ?", (vid,)).fetchone()
+        return _vehicle_out(row_to_dict(row))
+
+
+def update_vehicle(vehicle_id: str, data: dict) -> Optional[dict]:
+    """Partial update. The nullable fields (reg/make/model and the four *_due
+    dates) use presence (`key in data`) so they can be cleared to NULL; `notes`
+    coerces None to '' to honour its NOT NULL constraint."""
+    fields, values = [], []
+    if data.get("name") is not None:
+        name = data["name"].strip()
+        if name:  # never blank the required name via PATCH
+            fields.append("name = ?")
+            values.append(name)
+    for key in ("reg", "make", "model", "mot_due", "tax_due", "insurance_due", "service_due"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"] if data["notes"] is not None else "")
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM vehicles WHERE id = ?", (vehicle_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(vehicle_id)
+            conn.execute(f"UPDATE vehicles SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM vehicles WHERE id = ?", (vehicle_id,)).fetchone()
+        return _vehicle_out(row_to_dict(row))
+
+
+def delete_vehicle(vehicle_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM vehicles WHERE id = ?", (vehicle_id,))
+        return cur.rowcount > 0
+
+
+def vehicles_due_within(days: int) -> list[dict]:
+    """For each vehicle, one entry per due field (MOT/Tax/Insurance/Service) that
+    is set and whose date falls within `days` from today, so a single vehicle can
+    yield up to four entries. Mirrors documents_expiring_within: includes ones that
+    lapsed at most 1 day ago (a small grace window) but nothing older, so a
+    reminder can still fire the day something is due. Ordered by due_date."""
+    today = date.today()
+    horizon = today + timedelta(days=days)
+    floor = today - timedelta(days=1)
+    kinds = [
+        ("mot_due", "MOT"),
+        ("tax_due", "Tax"),
+        ("insurance_due", "Insurance"),
+        ("service_due", "Service"),
+    ]
+    out: list[dict] = []
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM vehicles ORDER BY name").fetchall()
+        for r in rows:
+            d = row_to_dict(r)
+            for col, kind in kinds:
+                raw = d.get(col)
+                if not raw:
+                    continue
+                try:
+                    due = date.fromisoformat(str(raw)[:10])
+                except (TypeError, ValueError):
+                    continue
+                if floor <= due <= horizon:
+                    out.append({
+                        "vehicle_id": d["id"],
+                        "name": d["name"],
+                        "reg": d.get("reg"),
+                        "kind": kind,
+                        "due_date": raw,
+                    })
+    out.sort(key=lambda e: e["due_date"])
+    return out
