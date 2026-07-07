@@ -457,6 +457,22 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_meal",
+            "description": "Plan the evening meal for a specific date. Use for 'what's for dinner' planning.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "YYYY-MM-DD"},
+                    "title": {"type": "string", "description": "The meal, e.g. 'Spaghetti bolognese'"},
+                    "ingredients": {"type": "string", "description": "Comma-separated ingredients (optional)"},
+                },
+                "required": ["date", "title"],
+            },
+        },
+    },
 ]
 
 
@@ -867,6 +883,9 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 db.create_shopping_item(text, added_by=uid if user else None)
                 added.append(text)
             return {"ok": True, "added": added}
+        if name == "plan_meal":
+            meal = db.upsert_meal_plan(args["date"], args["title"], args.get("ingredients") or "")
+            return {"ok": True, "meal": meal}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)

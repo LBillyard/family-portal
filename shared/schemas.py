@@ -290,6 +290,7 @@ class NotificationPrefsUpdate(BaseModel):
     reminder_lead_days: Optional[int] = Field(default=None, ge=0, le=30)
     large_transaction_alerts: Optional[bool] = None
     large_transaction_threshold: Optional[int] = None
+    weekly_finance_summary: Optional[bool] = None
 
 
 class TradespersonCreate(BaseModel):
@@ -349,4 +350,10 @@ class AssetUpdate(BaseModel):
     type: Optional[str] = None
     value: Optional[float] = None
     notes: Optional[str] = None
+
+
+class MealPlanUpsert(BaseModel):
+    date: str
+    title: str
+    ingredients: Optional[str] = ""
 

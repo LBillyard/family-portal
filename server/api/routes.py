@@ -6,7 +6,7 @@ import os
 import secrets
 import time
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from urllib.parse import quote
 
 from pathlib import Path
@@ -47,6 +47,7 @@ from shared.schemas import (
     LoginRequest,
     MaintenanceCreate,
     MaintenanceUpdate,
+    MealPlanUpsert,
     MediaUpdate,
     MemberUpdate,
     MemoryCreate,
@@ -1391,6 +1392,54 @@ def delete_shopping_item_route(item_id: str, _: dict = Depends(require_user)):
 @router.post("/shopping/clear-done")
 def clear_done_shopping_route(_: dict = Depends(require_user)):
     return {"cleared": db.clear_done_shopping_items()}
+
+
+# --- Meal planner (weekly dinners) ---
+
+@router.get("/meals")
+def api_meals(start: str = "", end: str = "", _: dict = Depends(require_user)):
+    """Meals for a date range. With no range, defaults to the current week (Mon..Sun)."""
+    if not start or not end:
+        today = date.today()
+        monday = today - timedelta(days=today.weekday())
+        start = monday.isoformat()
+        end = (monday + timedelta(days=6)).isoformat()
+    return {"meals": db.list_meal_plans(start, end), "start": start, "end": end}
+
+
+@router.put("/meals")
+def upsert_meal_route(body: MealPlanUpsert, _: dict = Depends(require_user)):
+    title = (body.title or "").strip()
+    day = (body.date or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Meal title is required")
+    if len(day) != 10 or day.count("-") != 2:
+        raise HTTPException(status_code=400, detail="Date must be in YYYY-MM-DD format")
+    return {"meal": db.upsert_meal_plan(day, title, body.ingredients or "")}
+
+
+@router.delete("/meals/{day}")
+def delete_meal_route(day: str, _: dict = Depends(require_user)):
+    if not db.delete_meal_plan(day):
+        raise HTTPException(status_code=404, detail="No meal planned for that day")
+    return {"ok": True}
+
+
+@router.post("/meals/{day}/to-shopping")
+def meal_to_shopping_route(day: str, user: dict = Depends(require_user)):
+    """Add a planned meal's ingredients to the shared shopping list."""
+    meal = db.get_meal_plan(day)
+    if not meal:
+        raise HTTPException(status_code=404, detail="No meal planned for that day")
+    raw = meal.get("ingredients") or ""
+    parts = [p.strip() for chunk in raw.split("\n") for p in chunk.split(",")]
+    added: list[str] = []
+    for text in parts:
+        if not text:
+            continue
+        db.create_shopping_item(text, added_by=user["id"])
+        added.append(text)
+    return {"added": added}
 
 
 # --- Tasks & documents ---

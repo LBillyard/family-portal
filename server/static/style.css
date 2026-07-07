@@ -16,6 +16,17 @@
   --navy-700: #243a5e;
   --navy-600: #2f4a73;
 
+  /* "Chrome" surfaces stay dark navy in BOTH light and dark themes — header,
+     welcome hero, briefing, toast, login backdrop, active segmented buttons,
+     chat bubbles. These mirror the navy ramp's light-mode hexes as literals so
+     dark mode can freely remap the navy-* ramp to light text without breaking
+     these dark, white-text surfaces. */
+  --chrome-950: #0f1d32;
+  --chrome-900: #152238;
+  --chrome-800: #1c2d4a;
+  --chrome-700: #243a5e;
+  --chrome-600: #2f4a73;
+
   --teal-600: #008f8a;
   --teal-500: #00a89e;
   --teal-400: #14b8aa;
@@ -64,6 +75,113 @@
   --max-width: 1280px;
   --font: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --transition: 0.18s ease;
+
+  color-scheme: light;
+}
+
+/* ==========================================================================
+   Dark theme
+   Achieved purely by overriding the colour tokens above. Components reference
+   these variables, so nothing else needs restyling. The navy-* ramp — used as
+   heading TEXT throughout — is remapped to light values; the always-dark
+   "chrome" surfaces use the separate --chrome-* tokens so they stay dark.
+
+   Two triggers share ONE palette (see --hub-dark-* mixin note below):
+     • :root[data-theme="dark"]                        — explicit user choice
+     • prefers-color-scheme: dark + no explicit "light" — OS default
+   The explicit data-theme attribute always wins over the media query because
+   the attribute selector is only emitted outside the @media block.
+   ========================================================================== */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Navy ramp → light text (headings, titles, list-item titles, inline styles) */
+  --navy-950: #f4f8fd;
+  --navy-900: #e8eff8;
+  --navy-800: #d3ddec;
+  --navy-700: #b3c1d6;
+  --navy-600: #93a3bd;
+
+  /* Accent — brighten teal a touch for contrast on dark surfaces */
+  --accent: #1fc0b4;
+  --accent-hover: #46d3c8;
+  --accent-light: rgba(31, 192, 180, 0.16);
+
+  /* Surfaces */
+  --bg: #0b1119;
+  --bg-white: #151d29;
+  --surface: #151d29;
+  --surface-raised: #1c2634;
+  --surface-muted: #1e2937;
+  --border: #2b384a;
+  --border-light: #243040;
+
+  /* Text */
+  --text: #e6ecf3;
+  --text-secondary: #b1bdcd;
+  --text-muted: #8493a7;
+
+  /* Semantic — brighter foregrounds, translucent tinted backgrounds */
+  --green: #34d399;
+  --green-bg: rgba(5, 150, 105, 0.18);
+  --red: #f87171;
+  --red-bg: rgba(220, 38, 38, 0.18);
+  --amber: #fbbf24;
+  --amber-bg: rgba(217, 119, 6, 0.18);
+  --purple: #a78bfa;
+  --purple-bg: rgba(124, 58, 237, 0.2);
+  --blue: #60a5fa;
+  --blue-bg: rgba(37, 99, 235, 0.2);
+
+  /* Shadows read as depth on dark */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Same palette as above, applied only when the user hasn't explicitly chosen
+     "light". Kept in sync with the :root[data-theme="dark"] block. */
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    color-scheme: dark;
+
+    --navy-950: #f4f8fd;
+    --navy-900: #e8eff8;
+    --navy-800: #d3ddec;
+    --navy-700: #b3c1d6;
+    --navy-600: #93a3bd;
+
+    --accent: #1fc0b4;
+    --accent-hover: #46d3c8;
+    --accent-light: rgba(31, 192, 180, 0.16);
+
+    --bg: #0b1119;
+    --bg-white: #151d29;
+    --surface: #151d29;
+    --surface-raised: #1c2634;
+    --surface-muted: #1e2937;
+    --border: #2b384a;
+    --border-light: #243040;
+
+    --text: #e6ecf3;
+    --text-secondary: #b1bdcd;
+    --text-muted: #8493a7;
+
+    --green: #34d399;
+    --green-bg: rgba(5, 150, 105, 0.18);
+    --red: #f87171;
+    --red-bg: rgba(220, 38, 38, 0.18);
+    --amber: #fbbf24;
+    --amber-bg: rgba(217, 119, 6, 0.18);
+    --purple: #a78bfa;
+    --purple-bg: rgba(124, 58, 237, 0.2);
+    --blue: #60a5fa;
+    --blue-bg: rgba(37, 99, 235, 0.2);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
+  }
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -87,7 +205,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 /* -------------------------------------------------------------------------- */
 
 .site-header {
-  background: linear-gradient(135deg, var(--navy-950) 0%, var(--navy-800) 55%, var(--navy-700) 100%);
+  background: linear-gradient(135deg, var(--chrome-950) 0%, var(--chrome-800) 55%, var(--chrome-700) 100%);
   color: var(--text-on-navy);
   position: sticky;
   top: 0;
@@ -1053,7 +1171,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 }
 
 .cat-btn.active {
-  background: var(--navy-800);
+  background: var(--chrome-800);
   border-color: var(--navy-800);
   color: #fff;
 }
@@ -1452,7 +1570,7 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
   letter-spacing: 0.05em;
 }
 
-.data-table tbody tr:hover { background: #f8fafc; }
+.data-table tbody tr:hover { background: var(--surface-muted); }
 .data-table tbody tr:last-child td { border-bottom: none; }
 
 .status-dot {
@@ -2107,7 +2225,7 @@ dialog select:focus {
 
 .holiday-card-header {
   padding: 16px 20px;
-  background: linear-gradient(135deg, var(--navy-800), var(--navy-700));
+  background: linear-gradient(135deg, var(--chrome-800), var(--chrome-700));
   color: #fff;
 }
 
@@ -2141,7 +2259,7 @@ dialog select:focus {
 .status-tag.idea { background: var(--purple-bg); color: var(--purple); }
 .status-tag.upcoming { background: var(--blue-bg); color: var(--blue); }
 .status-tag.completed { background: var(--surface-muted); color: var(--text-muted); }
-.status-tag.cancelled { background: #fde8e8; color: #c53030; }
+.status-tag.cancelled { background: var(--red-bg); color: var(--red); }
 
 .source-tag {
   font-size: 0.625rem;
@@ -2199,7 +2317,7 @@ dialog select:focus {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  background: var(--navy-900);
+  background: var(--chrome-900);
   color: #fff;
   padding: 14px 20px;
   border-radius: var(--radius);
@@ -2311,7 +2429,7 @@ dialog select:focus {
 .btn-group .btn-seg:last-child { border-right: none; }
 .btn-group .btn-seg:hover { background: var(--surface-muted); color: var(--text); }
 .btn-group .btn-seg.active {
-  background: var(--navy-800);
+  background: var(--chrome-800);
   color: #fff;
 }
 
@@ -2380,7 +2498,7 @@ dialog select:focus {
 /* --- Welcome hero --- */
 
 .welcome-hero {
-  background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 60%, var(--navy-600) 100%);
+  background: linear-gradient(135deg, var(--chrome-900) 0%, var(--chrome-700) 60%, var(--chrome-600) 100%);
   border-radius: var(--radius-lg);
   padding: 28px 32px;
   color: #fff;
@@ -2489,7 +2607,7 @@ dialog select:focus {
 }
 
 .action-tile-icon.teal { background: linear-gradient(135deg, var(--teal-500), var(--teal-600)); }
-.action-tile-icon.navy { background: linear-gradient(135deg, var(--navy-700), var(--navy-800)); }
+.action-tile-icon.navy { background: linear-gradient(135deg, var(--chrome-700), var(--chrome-800)); }
 .action-tile-icon.purple { background: linear-gradient(135deg, var(--purple), #5b21b6); }
 .action-tile-icon.amber { background: linear-gradient(135deg, var(--amber), #b45309); }
 .action-tile-icon.green { background: linear-gradient(135deg, var(--green), #047857); }
@@ -2684,6 +2802,7 @@ dialog select:focus {
 .row-edit .te-input {
   padding: 8px 10px; font-size: 0.9375rem; font-weight: 600; font-family: var(--font);
   border: 1px solid var(--border); border-radius: 6px; width: 100%;
+  background: var(--surface-raised); color: var(--text);
 }
 .row-edit-fields { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .row-edit-fields label {
@@ -2694,6 +2813,7 @@ dialog select:focus {
 .row-edit-fields input, .row-edit-fields select {
   padding: 6px 8px; font-size: 0.8125rem; font-family: var(--font);
   border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-raised); color: var(--text);
 }
 .row-edit-fields .row-edit-check {
   flex-direction: row; align-items: center; gap: 6px;
@@ -3162,7 +3282,8 @@ dialog select:focus {
   border-radius: var(--radius-sm);
   font-family: var(--font);
   font-size: 0.875rem;
-  background: #fff;
+  background: var(--surface);
+  color: var(--text);
 }
 
 .ai-input-row input:focus {
@@ -3377,6 +3498,8 @@ dialog select:focus {
   border-radius: var(--radius-sm);
   font-family: var(--font);
   font-size: 0.875rem;
+  background: var(--surface-raised);
+  color: var(--text);
 }
 
 .wf-modal-body input:focus,
@@ -3633,7 +3756,7 @@ dialog select:focus {
   position: fixed;
   inset: 0;
   z-index: 400;
-  background: linear-gradient(135deg, var(--navy-950) 0%, var(--navy-800) 100%);
+  background: linear-gradient(135deg, var(--chrome-950) 0%, var(--chrome-800) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3914,7 +4037,7 @@ dialog select:focus {
 
 .assistant-msg.user {
   align-self: flex-end;
-  background: var(--navy-800);
+  background: var(--chrome-800);
   color: #fff;
   border-bottom-right-radius: 4px;
 }
@@ -4190,7 +4313,7 @@ dialog select:focus {
 
 /* Briefing, activity, renewals, maintenance */
 .briefing-card {
-  background: linear-gradient(135deg, var(--navy-900, #0e1e40) 0%, #1a3a6b 100%);
+  background: linear-gradient(135deg, var(--chrome-900) 0%, #1a3a6b 100%);
   color: #fff;
   border: none;
 }
@@ -4275,15 +4398,15 @@ dialog select:focus {
   grid-template-columns: 100px 1fr;
   gap: 16px;
   padding: 14px 16px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border, #e8ecf4);
   border-radius: 10px;
   align-items: center;
 }
 
 .renewal-row.overdue {
-  border-color: #fecaca;
-  background: #fef2f2;
+  border-color: var(--red);
+  background: var(--red-bg);
 }
 
 .renewal-date {
@@ -4331,7 +4454,7 @@ dialog select:focus {
   align-items: flex-start;
   gap: 12px;
   padding: 14px 16px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--border, #e8ecf4);
   border-radius: 10px;
 }
@@ -4348,8 +4471,8 @@ dialog select:focus {
 .assistant-confirm-bar {
   margin-top: 12px;
   padding: 12px;
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
+  background: var(--amber-bg);
+  border: 1px solid var(--amber);
   border-radius: 10px;
 }
 
@@ -4377,15 +4500,15 @@ dialog select:focus {
 .acct-btn {
   font-size: 0.72rem;
   padding: 3px 9px;
-  border: 1px solid rgba(15, 29, 50, 0.15);
-  background: #fff;
+  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: 7px;
   cursor: pointer;
   color: var(--text-muted, #64748b);
   transition: background 0.15s;
 }
 .acct-btn:hover {
-  background: #eef2f7;
+  background: var(--surface-muted);
 }
 .acct-hidden-link {
   align-self: center;
@@ -4397,9 +4520,10 @@ dialog select:focus {
 .txn-cat {
   font-size: 0.8125rem;
   padding: 4px 8px;
-  border: 1px solid rgba(15, 29, 50, 0.15);
+  border: 1px solid var(--border);
   border-radius: 7px;
-  background: #fff;
+  background: var(--surface);
+  color: var(--text);
   max-width: 160px;
   cursor: pointer;
 }
@@ -4549,6 +4673,100 @@ dialog select:focus {
   cursor: pointer;
 }
 .shopping-clear:hover { text-decoration: underline; }
+
+/* -------------------------------------------------------------------------- */
+/* Weekly meal planner (home card)                                            */
+/* -------------------------------------------------------------------------- */
+.meal-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.meal-row:last-child { border-bottom: none; }
+.meal-day {
+  display: flex;
+  flex-direction: column;
+  min-width: 50px;
+  line-height: 1.25;
+  flex-shrink: 0;
+}
+.meal-day-name { font-size: 0.8125rem; font-weight: 700; color: var(--navy-900); }
+.meal-day-date { font-size: 0.6875rem; color: var(--text-muted); }
+.meal-row.today .meal-day-name { color: var(--accent); }
+.meal-body {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.meal-title {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--text);
+}
+.meal-empty-text { color: var(--text-muted); font-weight: 400; }
+.meal-body:hover .meal-title { color: var(--accent); }
+.meal-ingredients {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meal-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.meal-cart-btn,
+.meal-edit-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--text-muted);
+  transition: background var(--transition), color var(--transition);
+}
+.meal-cart-btn:hover,
+.meal-edit-btn:hover { background: var(--surface-muted); color: var(--accent); }
+/* Inline meal editor reuses the shared .row-edit styling; give it breathing room. */
+.meal-row .row-edit { flex: 1; padding: 4px 0; }
+
+/* -------------------------------------------------------------------------- */
+/* Appearance / theme control (settings)                                      */
+/* -------------------------------------------------------------------------- */
+.theme-seg-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.theme-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.theme-seg:last-child { border-right: none; }
+.theme-seg:hover { background: var(--surface-muted); }
+.theme-seg.active { background: var(--accent); color: #fff; }
+.theme-seg svg { width: 16px; height: 16px; }
 
 /* -------------------------------------------------------------------------- */
 /* Finances — Insights card                                                   */

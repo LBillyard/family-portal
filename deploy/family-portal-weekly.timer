@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Family Portal weekly finance recap at 18:00 Europe/London on Sundays
+
+[Timer]
+# Timezone-aware: fires Sunday 18:00 UK local time (handles BST/GMT automatically).
+# Expressing the time as UK local means systemd resolves BST/GMT for us
+# (18:00 BST = 17:00 UTC).
+OnCalendar=Sun *-*-* 18:00:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target

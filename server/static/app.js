@@ -1,5 +1,69 @@
 /* Family Portal — live app */
 
+// --- Theme (light / dark / system) ---------------------------------------
+// Applied as early as possible (module top-level runs before load()/render)
+// to avoid a flash. A tiny inline <head> guard in index.html handles the very
+// first paint; these helpers keep everything in sync afterwards.
+const THEME_KEY = 'hub-theme';
+const THEME_ICONS = {
+  moon: '<svg viewBox="0 0 20 20" fill="currentColor"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"/></svg>',
+  sun: '<svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"/></svg>',
+};
+
+function getThemePref() {
+  const v = localStorage.getItem(THEME_KEY);
+  return v === 'light' || v === 'dark' || v === 'system' ? v : 'system';
+}
+
+// Apply a theme preference by driving the root data-theme attribute.
+// 'system' removes the attribute so the prefers-color-scheme media query governs.
+function applyTheme(pref) {
+  if (pref === 'light' || pref === 'dark') {
+    document.documentElement.dataset.theme = pref;
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
+  updateThemeToggleIcon();
+}
+
+// The theme actually in effect right now (resolving 'system' against the OS).
+function effectiveTheme() {
+  const pref = getThemePref();
+  if (pref === 'light' || pref === 'dark') return pref;
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+// Persist + apply a preference, and reflect it in any visible controls.
+function setThemePref(pref) {
+  localStorage.setItem(THEME_KEY, pref);
+  applyTheme(pref);
+  document.querySelectorAll('.theme-seg').forEach((b) => b.classList.toggle('active', b.dataset.theme === pref));
+}
+
+// Header quick-toggle: flip between light and dark (leaves 'system' behind).
+function toggleTheme() {
+  setThemePref(effectiveTheme() === 'dark' ? 'light' : 'dark');
+}
+
+// Header button shows a moon while light (tap → dark) and a sun while dark.
+function updateThemeToggleIcon() {
+  const btn = document.getElementById('theme-toggle');
+  if (!btn) return;
+  const dark = effectiveTheme() === 'dark';
+  btn.innerHTML = dark ? THEME_ICONS.sun : THEME_ICONS.moon;
+  btn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  btn.setAttribute('aria-label', btn.title);
+}
+
+// Apply the saved preference immediately on script load.
+applyTheme(getThemePref());
+// Keep 'system' choices live when the OS flips light/dark.
+if (window.matchMedia) {
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
+    if (getThemePref() === 'system') updateThemeToggleIcon();
+  });
+}
+
 const API = '/api';
 let store = {};
 let currentUser = null;
@@ -1364,6 +1428,96 @@ function clearDoneShopping() {
     .catch((err) => showToast(err.message, true));
 }
 
+// --- Weekly meal planner (home card) ---
+// Own endpoint / own refresh, like the shopping list — editing one day never
+// resets the whole page. GET /meals with no params returns the current Mon–Sun
+// week as { meals:[{date,title,ingredients,...}], start, end }.
+let mealsData = null;
+
+async function loadMeals() {
+  const el = document.getElementById('home-meals');
+  if (!el) return;
+  try {
+    mealsData = await api('/meals');
+    renderMeals(mealsData);
+  } catch {
+    mealsData = null;
+    el.innerHTML = '<p class="hint-small">Meal planner unavailable.</p>';
+  }
+}
+
+// Seven Date objects Mon→Sun. Prefer the server's start; fall back to this
+// week's Monday so the card still fills in if start is ever missing.
+function mealWeekDates(startIso) {
+  let base;
+  if (startIso) {
+    base = new Date(`${startIso}T00:00:00`);
+  } else {
+    base = new Date();
+    const dow = (base.getDay() + 6) % 7; // 0 = Monday
+    base.setDate(base.getDate() - dow);
+  }
+  const out = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(base);
+    d.setDate(base.getDate() + i);
+    out.push(d);
+  }
+  return out;
+}
+
+function renderMeals(data) {
+  const el = document.getElementById('home-meals');
+  if (!el) return;
+  const byDate = {};
+  (data?.meals || []).forEach((m) => { byDate[m.date] = m; });
+  const todayIso = calYmd(new Date());
+  el.innerHTML = mealWeekDates(data?.start)
+    .map((d) => {
+      const iso = calYmd(d);
+      const m = byDate[iso];
+      const today = iso === todayIso ? ' today' : '';
+      return `<div class="meal-row${m ? '' : ' empty'}${today}" data-date="${iso}">${mealRowInner(d, iso, m)}</div>`;
+    })
+    .join('');
+}
+
+function mealRowInner(dateObj, iso, m) {
+  const day = dateObj.toLocaleDateString('en-GB', { weekday: 'short' });
+  const dm = dateObj.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const title = m && m.title ? esc(m.title) : '<span class="meal-empty-text">—</span>';
+  const ingredients = m && m.ingredients ? `<div class="meal-ingredients">${esc(m.ingredients)}</div>` : '';
+  const cart = m && m.title
+    ? `<button type="button" class="meal-cart-btn wf-action" data-action="meal-to-shopping" data-date="${iso}" title="Add ingredients to shopping list" aria-label="Add ingredients to shopping list">🛒</button>`
+    : '';
+  return `
+    <div class="meal-day"><span class="meal-day-name">${esc(day)}</span><span class="meal-day-date">${esc(dm)}</span></div>
+    <div class="meal-body wf-action" data-action="edit-meal" data-date="${iso}">
+      <div class="meal-title">${title}</div>
+      ${ingredients}
+    </div>
+    <div class="meal-row-actions">
+      ${cart}
+      <button type="button" class="meal-edit-btn wf-action" data-action="edit-meal" data-date="${iso}" title="Edit meal" aria-label="Edit meal">✎</button>
+    </div>`;
+}
+
+// Inline editor that replaces a meal row's contents (reuses .row-edit styling).
+function mealEditInner(m) {
+  return `
+    <div class="row-edit" data-date="${m.date}">
+      <input type="text" class="te-input" data-f="title" value="${esc(m.title || '')}" placeholder="Dinner (e.g. Spaghetti bolognese)">
+      <div class="row-edit-fields">
+        <label>Ingredients<input type="text" data-f="ingredients" value="${esc(m.ingredients || '')}" placeholder="e.g. pasta, mince, tomatoes, onion"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-meal-inline" data-date="${m.date}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-meal-inline" data-date="${m.date}">Cancel</button>
+        ${m.title ? `<button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-meal-inline" data-date="${m.date}" style="margin-left:auto">Delete</button>` : ''}
+      </div>
+    </div>`;
+}
+
 function calYmd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -2555,7 +2709,20 @@ function renderSettings(data) {
     { key: 'google_writeback', icon: '↩️', name: 'Calendar write-back', on: 'Portal events push to Google', off: 'Configure Google OAuth' },
   ];
 
+  const themePref = getThemePref();
+  const themeSeg = (val, label, iconKey) =>
+    `<button type="button" class="theme-seg wf-action${themePref === val ? ' active' : ''}" data-action="set-theme" data-theme="${val}">${iconKey ? THEME_ICONS[iconKey] : ''}${label}</button>`;
+
   document.getElementById('settings-content').innerHTML = `
+    <div class="settings-section">
+      <h3>Appearance</h3>
+      <p>Choose a theme. <strong>System</strong> follows your device's light or dark setting automatically.</p>
+      <div class="theme-seg-group" role="group" aria-label="Theme">
+        ${themeSeg('light', 'Light', 'sun')}
+        ${themeSeg('dark', 'Dark', 'moon')}
+        ${themeSeg('system', 'System', '')}
+      </div>
+    </div>
     <div class="settings-section">
       <h3>System status</h3>
       <p>The Hub keeps itself up to date — Google Calendar and banks re-sync automatically every hour.</p>
@@ -2742,6 +2909,7 @@ const NOTIF_PREF_ROWS = [
   ['bill_reminders', 'Bill reminders', 'Before recurring bills fall due'],
   ['renewal_reminders', 'Renewal reminders', 'Insurance, MOT and other renewals'],
   ['document_expiry_reminders', 'Document expiry', 'When a vault document is about to expire'],
+  ['weekly_finance_summary', 'Weekly finance recap', 'A money round-up each Sunday evening'],
 ];
 
 // Fetch notification preferences and render the settings card. Hides the card
@@ -3455,6 +3623,10 @@ function initActions() {
       switchTab('settings');
       return;
     }
+    if (action === 'set-theme') {
+      setThemePref(btn.dataset.theme || 'system');
+      return;
+    }
     if (action === 'toggle-task') {
       const taskId = btn.dataset.taskId;
       const nowDone = btn.dataset.done !== '1';
@@ -3998,6 +4170,51 @@ function initActions() {
     if (action === 'delete-shopping') { deleteShoppingItem(btn.dataset.shopId); return; }
     if (action === 'clear-done-shopping') { clearDoneShopping(); return; }
 
+    // --- Weekly meal planner (home) — inline edit, own refresh ---
+    if (action === 'edit-meal') {
+      const row = btn.closest('.meal-row');
+      if (!row || row.querySelector('.row-edit')) return; // already editing
+      const date = row.dataset.date;
+      const meal = (mealsData?.meals || []).find((m) => m.date === date) || { date, title: '', ingredients: '' };
+      row.classList.add('editing');
+      row.innerHTML = mealEditInner(meal);
+      row.querySelector('[data-f="title"]')?.focus();
+      return;
+    }
+    if (action === 'save-meal-inline') {
+      const row = btn.closest('.meal-row');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Give the meal a name', true); return; }
+      btn.disabled = true;
+      api('/meals', {
+        method: 'PUT',
+        body: JSON.stringify({ date: btn.dataset.date, title: f.title.trim(), ingredients: (f.ingredients || '').trim() }),
+      }).then(() => loadMeals()).then(() => showToast('Meal saved'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'cancel-meal-inline') {
+      if (mealsData) renderMeals(mealsData); else loadMeals();
+      return;
+    }
+    if (action === 'delete-meal-inline') {
+      api(`/meals/${btn.dataset.date}`, { method: 'DELETE' })
+        .then(() => loadMeals()).then(() => showToast('Meal cleared'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'meal-to-shopping') {
+      btn.disabled = true;
+      api(`/meals/${btn.dataset.date}/to-shopping`, { method: 'POST' })
+        .then((r) => {
+          const n = (r && r.added ? r.added.length : 0);
+          showToast(n ? `Added ${n} item${n === 1 ? '' : 's'} to the shopping list` : 'No ingredients to add');
+          loadShopping(); // reflect the new items on the shopping card
+        })
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+
     // --- Assets (finances net worth) — inline CRUD, refresh headline + list together ---
     if (action === 'add-asset') {
       const host = document.getElementById('assets-list');
@@ -4125,6 +4342,9 @@ function initActions() {
   document.getElementById('weather-btn').onclick = openWeather;
   document.getElementById('weather-close').onclick = closeWeather;
   document.getElementById('weather-backdrop').onclick = closeWeather;
+
+  document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
+  updateThemeToggleIcon(); // reflect the current theme now the button is wired
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -4802,6 +5022,7 @@ async function load() {
     renderNotifications(dashboard.reminders || [], dashboard.notifications_unread);
   }
   loadShopping();  // shared shopping list on the home card (own endpoint)
+  loadMeals();     // weekly meal planner on the home card (own endpoint)
   if (briefing) renderBriefing(briefing);
   if (activity) renderActivityFeed(activity);
   if (calendar) renderCalendar(calendar);

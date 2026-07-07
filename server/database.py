@@ -295,6 +295,7 @@ def init_db() -> None:
                 reminder_lead_days INTEGER NOT NULL DEFAULT 2,
                 large_transaction_alerts INTEGER NOT NULL DEFAULT 1,
                 large_transaction_threshold INTEGER NOT NULL DEFAULT 200,
+                weekly_finance_summary INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT
             );
 
@@ -341,6 +342,16 @@ def init_db() -> None:
                 type TEXT NOT NULL DEFAULT 'other',
                 value REAL NOT NULL DEFAULT 0,
                 notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            -- Weekly dinner planner: one planned dinner per calendar day.
+            CREATE TABLE IF NOT EXISTS meal_plans (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                ingredients TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -564,6 +575,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN large_transaction_alerts INTEGER NOT NULL DEFAULT 1")
     if "large_transaction_threshold" not in pcols:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN large_transaction_threshold INTEGER NOT NULL DEFAULT 200")
+    if "weekly_finance_summary" not in pcols:
+        conn.execute("ALTER TABLE notification_prefs ADD COLUMN weekly_finance_summary INTEGER NOT NULL DEFAULT 1")
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -2736,6 +2749,7 @@ _PREFS_BOOL_FIELDS = (
     "renewal_reminders",
     "document_expiry_reminders",
     "large_transaction_alerts",
+    "weekly_finance_summary",
 )
 
 
@@ -3045,4 +3059,57 @@ def update_asset(asset_id: str, data: dict) -> Optional[dict]:
 def delete_asset(asset_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+        return cur.rowcount > 0
+
+
+# --- Meal plans (one planned dinner per calendar day) ---
+
+def _meal_plan_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "date": r["date"],
+        "title": r["title"],
+        "ingredients": r["ingredients"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_meal_plans(start: str, end: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM meal_plans WHERE date BETWEEN ? AND ? ORDER BY date ASC",
+            (start, end),
+        ).fetchall()
+        return [_meal_plan_out(row_to_dict(r)) for r in rows]
+
+
+def get_meal_plan(day: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM meal_plans WHERE date = ?", (day,)).fetchone()
+        return _meal_plan_out(row_to_dict(row)) if row else None
+
+
+def upsert_meal_plan(day: str, title: str, ingredients: str = "") -> dict:
+    """Plan (or re-plan) the dinner for a single calendar day. Because `date` is
+    UNIQUE, a second call for the same day updates the existing row in place
+    (keeping its id) rather than inserting a duplicate."""
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO meal_plans (id, date, title, ingredients, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+                 title = excluded.title,
+                 ingredients = excluded.ingredients,
+                 updated_at = excluded.updated_at""",
+            (_new_id(), day, title.strip(), ingredients or "", now, now),
+        )
+        row = conn.execute("SELECT * FROM meal_plans WHERE date = ?", (day,)).fetchone()
+        return _meal_plan_out(row_to_dict(row))
+
+
+def delete_meal_plan(day: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM meal_plans WHERE date = ?", (day,))
         return cur.rowcount > 0

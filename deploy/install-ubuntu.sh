@@ -85,9 +85,10 @@ systemctl daemon-reload
 systemctl enable "$SERVICE"
 systemctl restart "$SERVICE"
 
-echo "==> Enabling timers (07:00 digest, hourly sync, 15-min task reminders, 08/13/18 reminders, 20:00 evening, 03:00 backup)..."
+echo "==> Enabling timers (07:00 digest, hourly sync, 15-min task reminders, 08/13/18 reminders, 20:00 evening, Sun 18:00 weekly finance, 03:00 backup)..."
 for TIMER in family-portal-digest.timer family-portal-sync.timer family-portal-task-reminders.timer \
-             family-portal-reminders.timer family-portal-evening.timer family-portal-backup.timer; do
+             family-portal-reminders.timer family-portal-evening.timer family-portal-weekly.timer \
+             family-portal-backup.timer; do
   systemctl enable --now "$TIMER"
 done
 
