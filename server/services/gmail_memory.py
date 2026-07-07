@@ -114,7 +114,7 @@ RULES:
 
 
 def _model() -> str:
-    return os.environ.get("OPENROUTER_DEFAULT_MODEL", "").strip() or "openai/gpt-4o-mini"
+    return (os.environ.get("MEMORY_EXTRACT_MODEL", "").strip() or os.environ.get("OPENROUTER_SMART_MODEL", "").strip() or "openai/gpt-4o")
 
 
 async def _extract_batch(emails: list[dict], known: list[str]) -> list[dict]:

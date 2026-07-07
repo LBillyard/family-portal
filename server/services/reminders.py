@@ -376,4 +376,21 @@ async def run_reminders() -> dict:
                 _push("Vehicle renewal", body, badge=alerts)
                 db.mark_notified(key)
 
+    # --- Smart cross-ref nudges: connect-the-dots reminders that link facts ACROSS
+    #     domains — a pet's jab due before a booked trip, a passport too close to a
+    #     trip's dates, a car's renewals clustering in one month. build_nudges is
+    #     best-effort (never raises) and returns stable, date-free keys so each nudge
+    #     fires once. Gated by the household's smart-nudges toggle; reminds everyone. ---
+    if prefs.get("smart_nudges"):
+        from server.services import cross_ref
+        for n in cross_ref.build_nudges(today):
+            checked += 1
+            if db.was_notified(n["key"]):
+                continue
+            if await _remind_household(household, n["body"]):
+                sent += len(household)
+                alerts += 1
+                _push("Smart nudge", n["body"], badge=alerts)
+                db.mark_notified(n["key"])
+
     return {"sent": sent, "checked": checked}

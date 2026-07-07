@@ -4413,6 +4413,7 @@ const NOTIF_PREF_ROWS = [
   ['weekly_finance_summary', 'Weekly finance recap', 'A money round-up each Sunday evening'],
   ['budget_alerts', 'Budget alerts', 'A heads-up when a spending category nears or exceeds its monthly budget'],
   ['proactive_inbox', 'Email suggestions', 'Let the Hub scan your inbox for bookings, renewals & bills and nudge you'],
+  ['smart_nudges', 'Smart nudges', 'Connect-the-dots reminders — e.g. a pet vaccination due before a trip, or a car renewal cluster'],
 ];
 
 // Fetch notification preferences and render the settings card. Hides the card

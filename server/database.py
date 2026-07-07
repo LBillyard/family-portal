@@ -300,6 +300,7 @@ def init_db() -> None:
                 budget_alerts INTEGER NOT NULL DEFAULT 1,
                 proactive_inbox INTEGER NOT NULL DEFAULT 1,
                 snap_sort_enabled INTEGER NOT NULL DEFAULT 1,
+                smart_nudges INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT
             );
 
@@ -743,6 +744,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN proactive_inbox INTEGER NOT NULL DEFAULT 1")
     if "snap_sort_enabled" not in pcols:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN snap_sort_enabled INTEGER NOT NULL DEFAULT 1")
+    if "smart_nudges" not in pcols:
+        conn.execute("ALTER TABLE notification_prefs ADD COLUMN smart_nudges INTEGER NOT NULL DEFAULT 1")
 
     conn.execute(
         """CREATE TABLE IF NOT EXISTS suggestions (
@@ -2000,6 +2003,23 @@ def list_documents(category: Optional[str] = None) -> list[dict]:
         return [_document_out(row_to_dict(r)) for r in rows]
 
 
+def search_documents(query: str) -> list[dict]:
+    """Case-insensitive search over document name, notes and category. Returns up
+    to 15 rows in the _document_out(...) shape (name/category/expiry/expiry_date/
+    status/notes). Empty/whitespace query -> []. Parameterised LIKE only."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    pattern = f"%{q}%"
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM documents WHERE name LIKE ? OR notes LIKE ? OR category LIKE ? "
+            "ORDER BY expiry, name LIMIT 15",
+            (pattern, pattern, pattern),
+        ).fetchall()
+        return [_document_out(row_to_dict(r)) for r in rows]
+
+
 def get_document(doc_id: str) -> Optional[dict]:
     with get_conn() as conn:
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
@@ -2978,6 +2998,7 @@ _PREFS_BOOL_FIELDS = (
     "budget_alerts",
     "proactive_inbox",
     "snap_sort_enabled",
+    "smart_nudges",
 )
 
 

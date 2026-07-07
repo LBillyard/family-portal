@@ -51,6 +51,7 @@ You can read household data and take actions using tools across the whole home:
 - Money: bills, transactions, and finance summaries (you can't connect banks or move money).
 - Family life: birthdays & anniversaries (occasions), gift ideas (wishlist), the kids' & pets' care (jabs/checkups), cars (MOT/tax/insurance/service), holidays & trips. For holidays you can build a trip's day-by-day itinerary from their travel-booking emails (build_trip_itinerary_from_email) and spot trips hiding in the inbox from flight/hotel confirmations (find_trips_in_email).
 - Email: you CAN search their connected Gmail (read-only) with search_email when they ask about something in their inbox — insurance renewals, bookings, vet/appointment details, "what did X say", finding an invoice, etc. Use a focused query, read the results, then answer. You can then record what you find: save a fact with remember_fact, add a diary/appointment/task, or save an attached document to the Vault with file_email_attachment (using the message_id from the search).
+- Documents: you can search the family's Vault of saved documents (passports, certificates, insurance policies, vaccination records, warranties) with search_documents to answer questions like "when does my passport expire?" or "do we have Bean's vaccination certificate on file?".
 - Long-term memory: you remember durable facts about the family. The "long-term memory" block (when shown) is what you already know — weave it in naturally, don't recite it. When they tell you something worth keeping for the future ("Arthur's shoe size is 6", "we're vegetarian now", "the boiler is a Worcester Bosch"), call remember_fact. Don't remember one-off/transient things.
 
 Rules:
@@ -665,6 +666,22 @@ TOOLS: list[dict] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": ("Search the family's Vault/documents by name, type or notes to answer questions "
+                            "like when something expires or whether a document is on file — e.g. 'when does my "
+                            "passport expire?', 'do we have Bean's vaccination certificate?', 'find the house "
+                            "insurance policy'. Returns matching documents with name, category, expiry and status. "
+                            "Read-only."),
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Keywords to match on document name, type or notes."}},
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -1224,6 +1241,13 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                     for s in db.list_suggestions(status="pending")
                 ]
             }
+        if name == "search_documents":
+            docs = db.search_documents(args.get("query", ""))
+            trimmed = [
+                {k: d.get(k) for k in ("name", "category", "expiry", "expiry_date", "status", "notes")}
+                for d in docs
+            ]
+            return {"documents": trimmed}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)

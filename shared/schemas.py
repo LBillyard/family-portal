@@ -298,6 +298,7 @@ class NotificationPrefsUpdate(BaseModel):
     budget_alerts: Optional[bool] = None
     proactive_inbox: Optional[bool] = None
     snap_sort_enabled: Optional[bool] = None
+    smart_nudges: Optional[bool] = None
 
 
 class TradespersonCreate(BaseModel):
