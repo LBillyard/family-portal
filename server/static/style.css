@@ -2677,6 +2677,9 @@ dialog select:focus {
 .mem-cand-body { min-width: 0; }
 .mem-cand-text { display: block; font-size: 0.9rem; color: var(--navy-800); }
 .mem-cand-meta { display: block; font-size: 0.7rem; color: var(--muted); margin-top: 2px; }
+.inbox-group { margin-bottom: 14px; }
+.inbox-group:last-child { margin-bottom: 0; }
+.inbox-group-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin: 6px 0 4px; }
 .row-edit { display: flex; flex-direction: column; gap: 10px; width: 100%; }
 .row-edit .te-input {
   padding: 8px 10px; font-size: 0.9375rem; font-weight: 600; font-family: var(--font);

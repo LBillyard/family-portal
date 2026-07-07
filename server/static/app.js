@@ -2458,6 +2458,10 @@ function renderSettings(data) {
       <button class="btn btn-sm btn-primary wf-action" data-action="send-reminders" ${integrations.email ? '' : 'disabled'}>Send test reminders</button>
     </div>
     <div class="settings-section" id="notif-prefs-section" hidden></div>
+    <div class="settings-section" id="push-settings">
+      <h3>Push notifications</h3>
+      <p>Loading…</p>
+    </div>
     <div class="settings-section">
       <h3>Household members</h3>
       <p>Colour labels used across calendar, tasks and appointments.</p>
@@ -2581,6 +2585,155 @@ async function handleNotifPrefChange(el) {
   }
 }
 
+// --- Web push notifications (browser) ---
+// Standard helper: turn a base64url VAPID key into the Uint8Array subscribe() wants.
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const output = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) output[i] = raw.charCodeAt(i);
+  return output;
+}
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+async function currentPushSubscription() {
+  if (!pushSupported()) return null;
+  try {
+    // Don't block forever on serviceWorker.ready (it never resolves if no SW ever
+    // activates) — race it against a short timeout so the settings card always paints.
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((res) => setTimeout(() => res(null), 3000)),
+    ]);
+    if (!reg) return null;
+    return await reg.pushManager.getSubscription();
+  } catch {
+    return null;
+  }
+}
+
+// Paint the push card in Settings to reflect the current subscription state.
+async function refreshPushUI() {
+  const section = document.getElementById('push-settings');
+  if (!section) return;
+  if (!pushSupported()) {
+    section.innerHTML = `
+      <h3>Push notifications</h3>
+      <p>This browser doesn't support web push notifications.</p>`;
+    return;
+  }
+  const sub = await currentPushSubscription();
+  const on = !!sub;
+  const denied = Notification.permission === 'denied';
+  section.innerHTML = `
+    <h3>Push notifications</h3>
+    <p>Get reminders on this device even when The Hub isn't open.${denied && !on ? ' Notifications are blocked in your browser settings — allow them there first.' : ''}</p>
+    <div class="connection-row">
+      <div class="connection-info">
+        <div class="connection-icon">🔔</div>
+        <div>
+          <div class="connection-name">This device</div>
+          <div class="connection-status ${on ? 'connected' : ''}">${on ? 'Notifications on' : 'Not enabled'}</div>
+        </div>
+      </div>
+      <span class="status-badge ${on ? 'ok' : 'off'}">${on ? 'On' : 'Off'}</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      ${on
+        ? `<button class="btn btn-sm btn-soft wf-action" data-action="push-test">Send test</button>
+           <button class="btn btn-sm btn-ghost wf-action" data-action="disable-push">Turn off</button>`
+        : `<button class="btn btn-sm btn-primary wf-action" data-action="enable-push"${denied ? ' disabled title="Blocked in browser settings"' : ''}>Enable push notifications</button>`}
+    </div>`;
+}
+
+async function enablePush() {
+  if (!pushSupported()) return showToast('Push notifications not supported on this device', true);
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return showToast('Notification permission denied', true);
+    let keyInfo;
+    try {
+      keyInfo = await api('/push/vapid-key');
+    } catch {
+      return showToast('Push not configured on server', true);
+    }
+    if (!keyInfo || !keyInfo.enabled || !keyInfo.key) {
+      return showToast('Push not configured on server', true);
+    }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(keyInfo.key),
+      });
+    }
+    const json = sub.toJSON();
+    await api('/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({
+        endpoint: sub.endpoint,
+        p256dh: json.keys?.p256dh,
+        auth: json.keys?.auth,
+      }),
+    });
+    showToast('Notifications on');
+    await refreshPushUI();
+  } catch (err) {
+    showToast(err.message || 'Could not enable notifications', true);
+    await refreshPushUI();
+  }
+}
+
+async function disablePush() {
+  try {
+    const sub = await currentPushSubscription();
+    if (sub) {
+      // Tell the server first (so it stops sending) then drop the local subscription.
+      try {
+        await api('/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint: sub.endpoint }) });
+      } catch {
+        /* server may already have pruned it — unsubscribe locally regardless */
+      }
+      await sub.unsubscribe();
+    }
+    showToast('Notifications off');
+  } catch (err) {
+    showToast(err.message, true);
+  }
+  await refreshPushUI();
+}
+
+async function sendPushTest() {
+  try {
+    await api('/push/test', { method: 'POST' });
+    showToast('Test notification sent');
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+// Emoji per result type for the unified-search rows (falls back to a magnifier).
+const SEARCH_TYPE_ICONS = {
+  event: '📅',
+  appointment: '🩺',
+  bill: '💷',
+  transaction: '💷',
+  task: '✅',
+  trip: '🧳',
+  holiday: '🧳',
+  document: '📄',
+  subscription: '🔁',
+  memory: '🧠',
+  contact: '👤',
+  tradesperson: '🛠️',
+  maintenance: '🛠️',
+};
+
 function openSearchModal() {
   closeModal();
   closeNotif();
@@ -2612,12 +2765,19 @@ function openSearchModal() {
       const data = await api(`/search?q=${encodeURIComponent(q.trim())}`);
       const results = data.results || [];
       resultsEl.innerHTML = results.length
-        ? results.map((r) => `
-          <button type="button" class="search-result wf-action" data-tab-link="${r.tab}">
-            <span class="search-result-type">${esc(r.type)}</span>
-            <strong>${esc(r.label)}</strong>
-            <span class="search-result-meta">${esc(r.meta || '')}</span>
-          </button>`).join('')
+        ? results.map((r) => {
+            // Backend contract: {type, title, subtitle, tab, id}. Fall back to the
+            // older {label, meta} shape so a mixed-version backend still renders.
+            const title = r.title || r.label || 'Untitled';
+            const subtitle = r.subtitle ?? r.meta ?? '';
+            const ic = SEARCH_TYPE_ICONS[r.type] || '🔎';
+            return `
+          <button type="button" class="search-result wf-action" data-tab-link="${esc(r.tab || 'home')}">
+            <span class="search-result-type">${ic} ${esc(r.type || '')}</span>
+            <strong>${esc(title)}</strong>
+            ${subtitle ? `<span class="search-result-meta">${esc(subtitle)}</span>` : ''}
+          </button>`;
+          }).join('')
         : '<p class="hint-small">No matches found.</p>';
     } catch (err) {
       resultsEl.innerHTML = `<p class="hint-small">${esc(err.message)}</p>`;
@@ -3509,6 +3669,22 @@ function initActions() {
       scanEmailReceipts();
       return;
     }
+    if (action === 'scan-inbox') {
+      scanInbox();
+      return;
+    }
+    if (action === 'enable-push') {
+      enablePush();
+      return;
+    }
+    if (action === 'disable-push') {
+      disablePush();
+      return;
+    }
+    if (action === 'push-test') {
+      sendPushTest();
+      return;
+    }
     if (action === 'send-reminders') {
       api('/notifications/send-reminders', { method: 'POST' })
         .then((r) => {
@@ -3969,6 +4145,98 @@ async function scanEmailMemory() {
   };
 }
 
+// Scan the inbox for bookings, appointments and documents, then let the user
+// review and pick which to import. Mirrors the scanEmailMemory review pattern.
+const INBOX_KIND_META = {
+  trip: { icon: '🧳', label: 'Trip' },
+  appointment: { icon: '📅', label: 'Appointment' },
+  document: { icon: '📄', label: 'Document' },
+};
+
+function inboxCandidateDetail(c) {
+  if (c.kind === 'trip') {
+    const dates = c.start ? `${fmt.date(c.start)}${c.end ? ' → ' + fmt.date(c.end) : ''}` : '';
+    return [c.destination, dates].filter(Boolean).join(' · ');
+  }
+  if (c.kind === 'appointment') {
+    return [c.provider, c.datetime ? fmt.datetime(c.datetime) : ''].filter(Boolean).join(' · ');
+  }
+  if (c.kind === 'document') {
+    const cat = DOC_CATEGORY_LABELS[c.category] || c.category;
+    return [cat, c.expiry_date ? 'expires ' + fmt.date(c.expiry_date) : ''].filter(Boolean).join(' · ');
+  }
+  return '';
+}
+
+async function scanInbox() {
+  showToast('Reading your inbox…');
+  let res;
+  try {
+    res = await api('/inbox/scan', { method: 'POST' });
+  } catch (err) {
+    return showToast(err.message, true);
+  }
+  const cands = res.candidates || [];
+  if (!cands.length) {
+    if ((res.needs_reconnect || []).length) {
+      return showToast('Reconnect Google in Settings to grant Gmail access', true);
+    }
+    return showToast(`Nothing to import found (scanned ${res.scanned || 0} emails)`);
+  }
+  window._inboxCands = cands;
+  // Group visually by kind, but keep each checkbox pointed at its original index.
+  const groups = ['trip', 'appointment', 'document']
+    .map((kind) => {
+      const items = cands.filter((c) => c.kind === kind);
+      if (!items.length) return '';
+      const meta = INBOX_KIND_META[kind];
+      const rows = items
+        .map((c) => {
+          const i = cands.indexOf(c);
+          const det = inboxCandidateDetail(c);
+          const src = c.source_subject ? ` · ${esc(c.source_subject)}` : '';
+          return `
+        <label class="mem-cand">
+          <input type="checkbox" class="inbox-cand-cb" data-idx="${i}" checked>
+          <span class="mem-cand-body">
+            <span class="mem-cand-text">${esc(c.title || 'Untitled')}</span>
+            <span class="mem-cand-meta">${meta.icon} ${meta.label}${det ? ' · ' + esc(det) : ''}${src}</span>
+          </span>
+        </label>`;
+        })
+        .join('');
+      return `<div class="inbox-group"><div class="inbox-group-label">${meta.icon} ${meta.label}s</div>${rows}</div>`;
+    })
+    .join('');
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="wf-modal wf-modal-wide" role="dialog">
+      <div class="wf-modal-header"><h3>Found in your email</h3><p>${cands.length} item(s) from ${res.scanned || 0} emails. Untick anything you don't want, then save.</p></div>
+      <div class="wf-modal-body">${groups}</div>
+      <div class="wf-modal-footer">
+        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="inbox-import-btn">Save selected</button>
+      </div>
+    </div>`;
+  document.getElementById('modal-backdrop').onclick = closeModal;
+  document.getElementById('inbox-import-btn').onclick = async (e) => {
+    const picked = [...document.querySelectorAll('.inbox-cand-cb')]
+      .filter((cb) => cb.checked)
+      .map((cb) => window._inboxCands[parseInt(cb.dataset.idx, 10)]);
+    if (!picked.length) return closeModal();
+    e.target.disabled = true;
+    try {
+      const r = await api('/inbox/import', { method: 'POST', body: JSON.stringify({ items: picked }) });
+      closeModal();
+      showToast(`Added ${r.created ?? picked.length}`);
+      await load();
+    } catch (err) {
+      showToast(err.message, true);
+      e.target.disabled = false;
+    }
+  };
+}
+
 const TOOL_LABELS = {
   get_household_summary: 'Checked household',
   list_upcoming_events: 'Listed events',
@@ -4211,7 +4479,7 @@ async function load() {
   if (subscriptions) renderSubscriptions(subscriptions);
   if (documents) renderDocuments(documents);
   if (memory) renderMemory(memory);
-  if (settings) { renderSettings(settings); loadNotificationPrefs(); }
+  if (settings) { renderSettings(settings); loadNotificationPrefs(); refreshPushUI(); }
 
   failed.forEach(markSectionFailed);
   if (failed.length) console.error('Failed to load:', failed.join(', '));

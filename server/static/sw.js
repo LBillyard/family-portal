@@ -1,4 +1,4 @@
-const CACHE = 'family-portal-v2025-07-06b';
+const CACHE = 'family-portal-v2025-07-07';
 
 self.addEventListener('install', (e) => {
   // Warm the shell so an installed PWA can open offline; assets cache on first fetch.
@@ -58,4 +58,41 @@ self.addEventListener('fetch', (e) => {
     );
   }
   // Everything else (unversioned statics, fonts, etc.) goes straight to the network.
+});
+
+// --- Push notifications ---
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    // Non-JSON payload — treat the raw text as the body.
+    data = { body: event.data ? event.data.text() : '' };
+  }
+  const title = data.title || 'The Hub';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: '/static/icon-192.png',
+      badge: '/static/icon-192.png',
+      data: { url: data.url || '/' },
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      // Focus an already-open tab (and navigate it) rather than opening a duplicate.
+      for (const client of clients) {
+        if ('focus' in client) {
+          if (client.navigate) client.navigate(url).catch(() => {});
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
 });

@@ -17,11 +17,11 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from server import auth, database as db
 from server.services import csv_import, dashboard as dash, documents as doc_files, google_calendar, openrouter, open_banking
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
-from server.services import memory as mem_svc, gmail_memory
+from server.services import memory as mem_svc, gmail_memory, gmail_inbox
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
-from server.services import weather as weather_svc, gmail_receipts
+from server.services import weather as weather_svc, gmail_receipts, push as push_svc
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
 from shared.schemas import (
     AccountUpdate,
@@ -50,6 +50,8 @@ from shared.schemas import (
     MemoryImport,
     MemoryUpdate,
     NotificationPrefsUpdate,
+    InboxImport,
+    PushSubscribe,
     SavingsGoalCreate,
     SavingsGoalUpdate,
     SearchQuery,
@@ -741,6 +743,30 @@ async def import_email_memory(body: MemoryImport, user: dict = Depends(require_u
     return {"imported": len(stored), "facts": stored}
 
 
+# --- Inbox auto-file (bookings / appointments / renewable documents from email) ---
+
+@router.post("/inbox/scan")
+async def inbox_scan(user: dict = Depends(require_user)):
+    """Scan connected Gmail for actionable bookings/appointments/documents (read-only)."""
+    if not openrouter.is_configured():
+        raise HTTPException(status_code=503, detail="OpenRouter not configured — set OPENROUTER_API_KEY")
+    if not google_calendar.is_configured():
+        raise HTTPException(status_code=503, detail="Google not configured")
+    try:
+        return await gmail_inbox.scan_for_items(user["id"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Inbox scan failed: {exc}") from exc
+
+
+@router.post("/inbox/import")
+async def inbox_import(body: InboxImport, user: dict = Depends(require_user)):
+    """File the items the user picked from an inbox scan into trips/appointments/documents."""
+    result = await gmail_inbox.commit([i.model_dump() for i in body.items])
+    if result.get("created"):
+        activity_svc.log(user, "created", "inbox", f"Filed {result['created']} item(s) from email")
+    return result
+
+
 @router.post("/transactions")
 def create_transaction(body: TransactionCreate, _: dict = Depends(require_user)):
     # Resolve to a REAL account id: accept a valid id, else map a name, else default.
@@ -1050,7 +1076,13 @@ async def api_weather(days: int = 7, _: dict = Depends(require_user)):
 
 @router.get("/search")
 def api_search(q: str = "", _: dict = Depends(require_user)):
-    return search_svc.search(q)
+    query = (q or "").strip()
+    results = search_svc.search_all(query) if query else []
+    # label/meta mirror title/subtitle for the existing search UI (back-compat).
+    for r in results:
+        r.setdefault("label", r["title"])
+        r.setdefault("meta", r["subtitle"])
+    return {"query": query, "results": results}
 
 
 @router.post("/search")
@@ -1217,6 +1249,39 @@ def get_notification_prefs(_: dict = Depends(require_user)):
 @router.patch("/notifications/prefs")
 def update_notification_prefs(body: NotificationPrefsUpdate, _: dict = Depends(require_user)):
     return db.update_notification_prefs(body.model_dump(exclude_unset=True))
+
+
+# --- Web Push (VAPID) ---
+
+@router.get("/push/vapid-key")
+def push_vapid_key(_: dict = Depends(require_user)):
+    return {"key": push_svc.get_public_key(), "enabled": push_svc.is_configured()}
+
+
+@router.post("/push/subscribe")
+def push_subscribe(body: PushSubscribe, user: dict = Depends(require_user)):
+    sub = db.add_push_subscription(user["id"], body.endpoint, body.p256dh, body.auth)
+    return {"ok": True, "subscription": sub}
+
+
+@router.post("/push/unsubscribe")
+async def push_unsubscribe(request: Request, endpoint: str = "", _: dict = Depends(require_user)):
+    ep = (endpoint or "").strip()
+    if not ep:
+        try:
+            data = await request.json()
+        except Exception:
+            data = None
+        ep = ((data or {}).get("endpoint") or "").strip()
+    if not ep:
+        raise HTTPException(status_code=400, detail="endpoint required")
+    return {"ok": db.delete_push_subscription(ep)}
+
+
+@router.post("/push/test")
+def push_test(_: dict = Depends(require_user)):
+    count = push_svc.notify("The Hub", "Test notification ✅")
+    return {"sent": count}
 
 
 # --- Tradespeople (household contacts directory) ---

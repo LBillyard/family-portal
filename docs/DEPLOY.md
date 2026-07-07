@@ -184,6 +184,32 @@ your.domain {
 
 ---
 
+## Web push setup
+
+Browser push notifications reach phones even outside the WhatsApp 24-hour reply
+window, so they're the reliable channel for reminders. Push requires the
+**HTTPS** site above (browsers refuse the Push API over plain HTTP).
+
+1. Generate one VAPID keypair on the server, inside the app venv:
+
+   ```bash
+   cd /opt/family-portal
+   ./venv/bin/python deploy/gen-vapid.py
+   ```
+
+2. Paste the three printed lines (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+   `VAPID_SUBJECT`) into `/opt/family-portal/.env`.
+
+3. Restart: `sudo systemctl restart family-portal`
+
+4. Each user opens the HTTPS site, goes to **Settings → Enable notifications**,
+   and accepts the browser permission prompt.
+
+Generate the keypair **once** and keep it — rotating `VAPID_*` invalidates every
+existing subscription, so users would have to re-enable notifications.
+
+---
+
 ## Backup
 
 SQLite database:

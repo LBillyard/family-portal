@@ -305,3 +305,28 @@ class TradespersonUpdate(BaseModel):
     email: Optional[str] = None
     notes: Optional[str] = None
 
+
+class PushSubscribe(BaseModel):
+    endpoint: str
+    p256dh: str
+    auth: str
+
+
+class InboxImportItem(BaseModel):
+    kind: Literal["trip", "appointment", "document"]
+    title: str
+    provider: Optional[str] = None
+    datetime: Optional[str] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    destination: Optional[str] = None
+    category: Optional[str] = None
+    expiry_date: Optional[str] = None
+    user_id: Optional[str] = None
+    notes: Optional[str] = None
+    source_subject: Optional[str] = None
+
+
+class InboxImport(BaseModel):
+    items: List[InboxImportItem]
+

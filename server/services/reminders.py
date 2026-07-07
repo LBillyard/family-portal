@@ -80,6 +80,19 @@ async def _send_one(phone: str, body: str) -> bool:
         return False
 
 
+def _push(title: str, body: str) -> None:
+    """Best-effort web-push mirror of a reminder. A bonus channel that reaches a
+    subscribed device even outside the WhatsApp 24h window; never blocks the run
+    and never affects reminder de-duplication. Imported lazily so push (and its
+    optional pywebpush dependency) is never a hard requirement here."""
+    try:
+        from server.services import push
+
+        push.notify(title, body)
+    except Exception:
+        logger.debug("Push notify failed (non-fatal)", exc_info=True)
+
+
 async def _remind_household(recipients: list[tuple[str, str]], body: str) -> int:
     """Send `body` to every household recipient. Returns messages successfully sent."""
     sent = 0
@@ -131,6 +144,7 @@ async def run_reminders() -> dict:
             body = f"⏰ Reminder: {a['title']}{at} on {when} ({whose})"
             if await _send_one(phone, body):
                 sent += 1
+                _push(a["title"], body)  # bonus channel — after the WhatsApp send, same item
                 db.mark_notified(key)
 
     # --- Bills: unpaid, next due-day within lead. Reminds the whole household. ---
@@ -151,6 +165,7 @@ async def run_reminders() -> dict:
             body = f"💷 Reminder: {bill['name']}{amt} due {_fmt_date(due)}"
             if await _remind_household(household, body):
                 sent += len(household)
+                _push(bill["name"], body)
                 db.mark_notified(key)
 
     # --- Renewals: subscriptions & maintenance from the renewal calendar. Bills and
@@ -176,6 +191,7 @@ async def run_reminders() -> dict:
             body = f"🔔 Reminder: {item.get('title')} renews {when}"
             if await _remind_household(household, body):
                 sent += len(household)
+                _push(item.get("title") or "Renewal", body)
                 db.mark_notified(key)
 
     # --- Document expiries: remind the whole household. ---
@@ -190,6 +206,7 @@ async def run_reminders() -> dict:
             body = f"📄 Reminder: {doc.get('name')} expires {when}"
             if await _remind_household(household, body):
                 sent += len(household)
+                _push(doc.get("name") or "Document", body)
                 db.mark_notified(key)
 
     return {"sent": sent, "checked": checked}

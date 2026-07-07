@@ -312,6 +312,16 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Browser/PWA Web Push subscriptions (one row per push endpoint).
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                endpoint TEXT NOT NULL UNIQUE,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -2835,4 +2845,47 @@ def update_tradesperson(tradesperson_id: str, data: dict) -> Optional[dict]:
 def delete_tradesperson(tradesperson_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM tradespeople WHERE id = ?", (tradesperson_id,))
+        return cur.rowcount > 0
+
+
+# --- Push subscriptions (browser/PWA Web Push) ---
+
+def _push_subscription_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "user_id": r.get("user_id"),
+        "endpoint": r["endpoint"],
+        "p256dh": r["p256dh"],
+        "auth": r["auth"],
+        "created_at": r.get("created_at"),
+    }
+
+
+def add_push_subscription(user_id: Optional[str], endpoint: str, p256dh: str, auth: str) -> dict:
+    """Register a Web Push subscription. Idempotent on endpoint — re-subscribing
+    with the same endpoint refreshes its keys and owner rather than duplicating."""
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(endpoint) DO UPDATE SET
+                 user_id = excluded.user_id,
+                 p256dh = excluded.p256dh,
+                 auth = excluded.auth""",
+            (_new_id(), user_id, endpoint, p256dh, auth, now),
+        )
+        row = conn.execute("SELECT * FROM push_subscriptions WHERE endpoint = ?", (endpoint,)).fetchone()
+        return _push_subscription_out(row_to_dict(row))
+
+
+def list_push_subscriptions() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM push_subscriptions ORDER BY created_at").fetchall()
+        return [_push_subscription_out(row_to_dict(r)) for r in rows]
+
+
+def delete_push_subscription(endpoint: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
         return cur.rowcount > 0
