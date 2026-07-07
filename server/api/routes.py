@@ -38,6 +38,8 @@ from shared.schemas import (
     BudgetUpdate,
     ChangePasswordRequest,
     ChecklistToggleRequest,
+    ChoreCreate,
+    ChoreUpdate,
     TransactionCategoryUpdate,
     DocumentCreate,
     EmailReceiptImport,
@@ -904,6 +906,16 @@ def api_finances_networth(_: dict = Depends(require_user)):
     return networth.build_networth()
 
 
+@router.get("/finances/networth-trend")
+def api_finances_networth_trend(_: dict = Depends(require_user)):
+    return networth.build_networth_trend()
+
+
+@router.get("/finances/spend-trend")
+def api_finances_spend_trend(_: dict = Depends(require_user)):
+    return insights.build_spend_trend()
+
+
 @router.get("/assets")
 def api_assets(_: dict = Depends(require_user)):
     return {"assets": db.list_assets()}
@@ -1494,6 +1506,46 @@ def delete_task_route(task_id: str, _: dict = Depends(require_user)):
     if not db.delete_task(task_id):
         raise HTTPException(status_code=404, detail="Task not found")
     return {"ok": True}
+
+
+# --- Chores (rotating household chores) ---
+
+@router.get("/chores")
+def api_chores(_: dict = Depends(require_user)):
+    return {"chores": db.list_chores()}
+
+
+@router.post("/chores")
+def create_chore_route(body: ChoreCreate, _: dict = Depends(require_user)):
+    if not (body.title or "").strip():
+        raise HTTPException(status_code=400, detail="Chore title is required")
+    return {"chore": db.create_chore(body.model_dump())}
+
+
+@router.patch("/chores/{chore_id}")
+def update_chore_route(chore_id: str, body: ChoreUpdate, _: dict = Depends(require_user)):
+    chore = db.update_chore(chore_id, body.model_dump(exclude_unset=True))
+    if chore is None:
+        raise HTTPException(status_code=404, detail="Chore not found")
+    return {"chore": chore}
+
+
+@router.delete("/chores/{chore_id}")
+def delete_chore_route(chore_id: str, _: dict = Depends(require_user)):
+    ok = db.delete_chore(chore_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Chore not found")
+    return {"ok": ok}
+
+
+@router.post("/chores/{chore_id}/done")
+def complete_chore_route(chore_id: str, _: dict = Depends(require_user)):
+    from server.services import chores as chores_svc
+
+    c = chores_svc.complete_chore(chore_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="Chore not found")
+    return {"chore": c}
 
 
 @router.get("/documents")

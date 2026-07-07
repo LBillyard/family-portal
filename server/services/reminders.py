@@ -239,4 +239,26 @@ async def run_reminders() -> dict:
                 _push("Large transaction", body, badge=alerts)
                 db.mark_notified(key)
 
+    # --- Chores: nudge the person whose turn it is when a chore falls due. ---
+    from server.services import chores as chores_svc
+    for ch in chores_svc.due_chores(today):
+        checked += 1
+        key = f"chore:{ch['id']}:{ch.get('next_due')}"
+        if db.was_notified(key):
+            continue
+        title = ch.get("title") or "Chore"
+        body = f"🧹 Your turn: {title} (due {ch.get('next_due')})"
+        assignee = db.get_user(ch.get("assignee_id")) if ch.get("assignee_id") else None
+        phone = (assignee or {}).get("phone")
+        ok = False
+        if phone:
+            ok = await _send_one(phone, body)
+        else:
+            ok = bool(await _remind_household(_household(), body))
+        if ok:
+            sent += 1
+            alerts += 1
+            _push("Chore due", body, badge=alerts)
+            db.mark_notified(key)
+
     return {"sent": sent, "checked": checked}

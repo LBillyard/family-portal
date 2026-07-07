@@ -355,6 +355,31 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Net worth trend history: one snapshot per calendar day so the
+            -- finance page can chart how net worth moves over time.
+            CREATE TABLE IF NOT EXISTS networth_snapshots (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL UNIQUE,
+                net_worth REAL NOT NULL,
+                cash_total REAL NOT NULL,
+                assets_total REAL NOT NULL,
+                liabilities_total REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            -- Recurring rotating household chores.
+            CREATE TABLE IF NOT EXISTS chores (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                cadence TEXT NOT NULL DEFAULT 'weekly',
+                assignee_id TEXT,
+                rotate INTEGER NOT NULL DEFAULT 1,
+                next_due TEXT,
+                last_done TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -3112,4 +3137,167 @@ def upsert_meal_plan(day: str, title: str, ingredients: str = "") -> dict:
 def delete_meal_plan(day: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM meal_plans WHERE date = ?", (day,))
+        return cur.rowcount > 0
+
+
+# --- Net worth snapshots (finance trend history) ---
+
+def _networth_snapshot_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "date": r["date"],
+        "net_worth": float(r["net_worth"]),
+        "cash_total": float(r["cash_total"]),
+        "assets_total": float(r["assets_total"]),
+        "liabilities_total": float(r["liabilities_total"]),
+        "created_at": r.get("created_at"),
+    }
+
+
+def upsert_networth_snapshot(
+    day: str,
+    net_worth: float,
+    cash_total: float,
+    assets_total: float,
+    liabilities_total: float,
+) -> dict:
+    """Record (or re-record) the net worth breakdown for a single calendar day.
+    Because `date` is UNIQUE, a second call for the same day updates the existing
+    row in place (keeping its id) rather than inserting a duplicate."""
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO networth_snapshots
+                   (id, date, net_worth, cash_total, assets_total, liabilities_total, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+                 net_worth = excluded.net_worth,
+                 cash_total = excluded.cash_total,
+                 assets_total = excluded.assets_total,
+                 liabilities_total = excluded.liabilities_total""",
+            (
+                _new_id(),
+                day,
+                float(net_worth),
+                float(cash_total),
+                float(assets_total),
+                float(liabilities_total),
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM networth_snapshots WHERE date = ?", (day,)).fetchone()
+        return _networth_snapshot_out(row_to_dict(row))
+
+
+def list_networth_snapshots(limit: int = 30) -> list[dict]:
+    """The most recent `limit` snapshots, returned oldest→newest so a chart can
+    plot them left→right."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM networth_snapshots ORDER BY date DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_networth_snapshot_out(row_to_dict(r)) for r in reversed(rows)]
+
+
+# --- Chores (recurring rotating household jobs) ---
+
+def _chore_out(r: dict) -> dict:
+    assignee_id = r.get("assignee_id")
+    assignee_name = None
+    if assignee_id:
+        user = get_user(assignee_id)
+        assignee_name = user["name"] if user else None
+    return {
+        "id": r["id"],
+        "title": r["title"],
+        "cadence": r["cadence"],
+        "assignee_id": assignee_id,
+        "assignee_name": assignee_name,
+        "rotate": bool(r["rotate"]),
+        "next_due": r.get("next_due"),
+        "last_done": r.get("last_done"),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_chores() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM chores ORDER BY (next_due IS NULL), next_due ASC, title"
+        ).fetchall()
+        return [_chore_out(row_to_dict(r)) for r in rows]
+
+
+def get_chore(chore_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM chores WHERE id = ?", (chore_id,)).fetchone()
+        return _chore_out(row_to_dict(row)) if row else None
+
+
+def create_chore(data: dict) -> dict:
+    cid = _new_id()
+    now = _utcnow()
+    rotate = 1 if data.get("rotate", True) else 0
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO chores
+                   (id, title, cadence, assignee_id, rotate, next_due, last_done, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                cid,
+                data["title"].strip(),
+                data.get("cadence") or "weekly",
+                data.get("assignee_id"),
+                rotate,
+                data.get("next_due"),
+                None,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM chores WHERE id = ?", (cid,)).fetchone()
+        return _chore_out(row_to_dict(row))
+
+
+def update_chore(chore_id: str, data: dict) -> Optional[dict]:
+    """Partial update. `assignee_id`, `next_due` and `last_done` may be set to an
+    explicit value INCLUDING None whenever the key is present in `data` (so the
+    backend's rotation logic can clear/reassign), so presence — not truthiness —
+    decides whether they're written."""
+    fields, values = [], []
+    if data.get("title") is not None:
+        fields.append("title = ?")
+        values.append(data["title"].strip())
+    if data.get("cadence") is not None:
+        fields.append("cadence = ?")
+        values.append(data["cadence"])
+    if "assignee_id" in data:
+        fields.append("assignee_id = ?")
+        values.append(data["assignee_id"])
+    if "rotate" in data and data["rotate"] is not None:
+        fields.append("rotate = ?")
+        values.append(1 if data["rotate"] else 0)
+    if "next_due" in data:
+        fields.append("next_due = ?")
+        values.append(data["next_due"])
+    if "last_done" in data:
+        fields.append("last_done = ?")
+        values.append(data["last_done"])
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM chores WHERE id = ?", (chore_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(chore_id)
+            conn.execute(f"UPDATE chores SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM chores WHERE id = ?", (chore_id,)).fetchone()
+        return _chore_out(row_to_dict(row))
+
+
+def delete_chore(chore_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM chores WHERE id = ?", (chore_id,))
         return cur.rowcount > 0

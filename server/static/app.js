@@ -1979,6 +1979,207 @@ function renderAssets(assets) {
     : '<div class="vault-empty"><p>No assets added yet.</p><p class="hint-small">Add your house, cars and valuables to see your true net worth.</p></div>';
 }
 
+// --- Finances: Trend charts (spending bars + net-worth line) ----------------
+// Inline SVGs only — no external chart libraries (CSP blocks CDNs). All colours
+// go through CSS variables (var(--accent) etc.) so both light and dark work.
+
+// Compact currency for tight chart axes/bar labels; hovers still use full fmt.gbp.
+function compactGbp(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 1000) return `£${(v / 1000).toFixed(1)}k`;
+  return `£${Math.round(v)}`;
+}
+
+async function loadTrends() {
+  const spendEl = document.getElementById('trend-spend');
+  const nwEl = document.getElementById('trend-networth');
+  if (!spendEl || !nwEl) return;
+  try {
+    const [spend, nw] = await Promise.all([
+      api('/finances/spend-trend'),
+      api('/finances/networth-trend'),
+    ]);
+    spendEl.innerHTML = renderSpendTrend(spend?.months || []);
+    nwEl.innerHTML = renderNetWorthTrend(nw?.points || []);
+  } catch {
+    // Older backend without these endpoints — leave a gentle placeholder.
+    spendEl.innerHTML = '<p class="hint-small">Trends unavailable.</p>';
+    nwEl.innerHTML = '';
+  }
+}
+
+// Bar chart: last 6 months of spend. Bars scale to the max; all-zero → note.
+function renderSpendTrend(months) {
+  if (!months.length) return '<p class="hint-small">No spending data yet.</p>';
+  const max = Math.max(...months.map((m) => m.spend || 0), 0);
+  if (max <= 0) return '<p class="hint-small">No spending recorded in the last 6 months yet.</p>';
+  const W = 320, H = 170, padL = 8, padR = 8, padT = 20, padB = 30;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const baseY = padT + plotH;
+  const n = months.length;
+  const slot = plotW / n;
+  const barW = Math.min(slot * 0.6, 46);
+  const bars = months.map((m, i) => {
+    const spend = m.spend || 0;
+    const h = (spend / max) * plotH;
+    const x = padL + i * slot + (slot - barW) / 2;
+    const y = baseY - h;
+    const cx = x + barW / 2;
+    const valLabel = spend > 0
+      ? `<text x="${cx.toFixed(1)}" y="${(y - 5).toFixed(1)}" text-anchor="middle" class="trend-bar-val">${compactGbp(spend)}</text>`
+      : '';
+    return `<g>
+        <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="3" class="trend-bar"><title>${esc(m.label)}: ${fmt.gbp(spend)}</title></rect>
+        ${valLabel}
+        <text x="${cx.toFixed(1)}" y="${H - 10}" text-anchor="middle" class="trend-axis-label">${esc(m.label)}</text>
+      </g>`;
+  }).join('');
+  return `<svg class="trend-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Spending over the last 6 months">
+    <line x1="${padL}" y1="${baseY}" x2="${W - padR}" y2="${baseY}" class="trend-axis-line"/>
+    ${bars}
+  </svg>`;
+}
+
+// Area+line chart: net worth over time. 0/1 points → friendly "history builds up" note.
+function renderNetWorthTrend(points) {
+  if (!points || points.length <= 1) {
+    return '<p class="hint-small">Net-worth history will build up over the coming days — snapshots are saved automatically.</p>';
+  }
+  const W = 320, H = 170, padL = 46, padR = 10, padT = 14, padB = 24;
+  const x0 = padL, x1 = W - padR, y0 = padT, y1 = H - padB;
+  const vals = points.map((p) => Number(p.net_worth) || 0);
+  const rawMin = Math.min(...vals), rawMax = Math.max(...vals);
+  let min = rawMin, max = rawMax;
+  if (max === min) { max += 1; min -= 1; } // flat line → centre it vertically
+  const n = points.length;
+  const sx = (i) => x0 + (n === 1 ? 0 : (i / (n - 1)) * (x1 - x0));
+  const sy = (v) => y1 - ((v - min) / (max - min)) * (y1 - y0);
+  const pts = points.map((p, i) => `${sx(i).toFixed(1)},${sy(vals[i]).toFixed(1)}`);
+  const linePath = 'M' + pts.join(' L');
+  const areaPath = `M${x0.toFixed(1)},${y1.toFixed(1)} L${pts.join(' L')} L${x1.toFixed(1)},${y1.toFixed(1)} Z`;
+  const shortDate = (d) => {
+    const dt = new Date(d);
+    return isNaN(dt) ? '' : dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  };
+  const last = n - 1;
+  return `<svg class="trend-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Net worth over time">
+    <line x1="${x0}" y1="${y1}" x2="${x1}" y2="${y1}" class="trend-axis-line"/>
+    <path d="${areaPath}" class="trend-area"/>
+    <path d="${linePath}" class="trend-line"/>
+    <circle cx="${sx(last).toFixed(1)}" cy="${sy(vals[last]).toFixed(1)}" r="3" class="trend-dot"><title>${esc(shortDate(points[last].date))}: ${fmt.gbp(vals[last])}</title></circle>
+    <text x="${x0 - 6}" y="${y0 + 4}" text-anchor="end" class="trend-axis-label">${compactGbp(rawMax)}</text>
+    <text x="${x0 - 6}" y="${y1}" text-anchor="end" class="trend-axis-label">${compactGbp(rawMin)}</text>
+    <text x="${x0}" y="${H - 8}" text-anchor="start" class="trend-axis-label">${esc(shortDate(points[0].date))}</text>
+    <text x="${x1}" y="${H - 8}" text-anchor="end" class="trend-axis-label">${esc(shortDate(points[last].date))}</text>
+  </svg>`;
+}
+
+// --- Home care: Chores rotation (inline CRUD, mirrors tradespeople) ----------
+const CHORE_CADENCES = [['weekly', 'Weekly'], ['fortnightly', 'Fortnightly'], ['monthly', 'Monthly']];
+const CADENCE_LABELS = { weekly: 'Weekly', fortnightly: 'Fortnightly', monthly: 'Monthly' };
+
+async function loadChores() {
+  const list = document.getElementById('chores-list');
+  if (!list) return;
+  try {
+    const data = await api('/chores');
+    store.chores = data.chores || [];
+    renderChores(store.chores);
+  } catch {
+    // Older backend without the endpoint — leave a gentle placeholder.
+    list.innerHTML = '<p class="hint-small">Chores unavailable.</p>';
+  }
+}
+
+function findChore(id) {
+  return (store.chores || []).find((c) => String(c.id) === String(id));
+}
+
+// Compare next_due (YYYY-MM-DD) to today for the overdue/due-today styling.
+function choreDueMeta(nextDue) {
+  if (!nextDue) return { cls: '', label: 'No date set' };
+  const due = String(nextDue).slice(0, 10);
+  const today = todayIsoDate();
+  if (due < today) return { cls: 'overdue', label: `Overdue · ${fmt.date(nextDue)}` };
+  if (due === today) return { cls: 'due-today', label: 'Due today' };
+  return { cls: '', label: `Due ${fmt.date(nextDue)}` };
+}
+
+// "Anyone" (null) + the two household members — reuses dashboard user list.
+function choreAssigneeOptions(selectedId) {
+  const users = store.dashboard?.users || [];
+  const anyoneSel = (selectedId == null || selectedId === '') ? ' selected' : '';
+  const opts = users
+    .map((u) => `<option value="${esc(u.id)}"${String(u.id) === String(selectedId ?? '') ? ' selected' : ''}>${esc(u.name)}</option>`)
+    .join('');
+  return `<option value=""${anyoneSel}>Anyone</option>${opts}`;
+}
+
+function choreRowInner(c) {
+  const due = choreDueMeta(c.next_due);
+  const who = c.assignee_name ? esc(c.assignee_name) : 'Anyone';
+  return `
+        <div>
+          <strong>${esc(c.title)}</strong>
+          <div class="subscription-meta">
+            <span class="chore-turn-badge${c.assignee_name ? '' : ' anyone'}">${who}</span>
+            <span>${esc(CADENCE_LABELS[c.cadence] || c.cadence)}</span>
+            <span class="chore-due ${due.cls}">${due.label}</span>
+            ${c.rotate ? '<span class="chore-rotate">🔁 Auto-swaps</span>' : ''}
+          </div>
+        </div>
+        <div class="subscription-actions">
+          <button class="btn btn-sm btn-primary wf-action" data-action="chore-done" data-chore-id="${c.id}">Done ✓</button>
+          <button class="bill-edit-btn wf-action" data-action="edit-chore" data-chore-id="${c.id}" title="Edit chore" aria-label="Edit chore">✎</button>
+        </div>`;
+}
+
+function choreEditInner(c) {
+  const cadOpts = CHORE_CADENCES.map(([v, l]) => `<option value="${v}"${v === c.cadence ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" data-chore-id="${c.id}">
+      <input type="text" class="te-input" data-f="title" value="${esc(c.title)}" placeholder="Chore (e.g. Take the bins out)">
+      <div class="row-edit-fields">
+        <label>Cadence<select data-f="cadence">${cadOpts}</select></label>
+        <label>Whose turn<select data-f="assignee_id">${choreAssigneeOptions(c.assignee_id)}</select></label>
+        <label>Next due<input type="date" data-f="next_due" value="${esc((c.next_due || '').slice(0, 10))}"></label>
+        <label class="row-edit-check"><input type="checkbox" data-f="rotate"${c.rotate ? ' checked' : ''}> Auto-swap each time</label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-chore-inline" data-chore-id="${c.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-chore-inline" data-chore-id="${c.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-chore" data-chore-id="${c.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function choreAddInner() {
+  const cadOpts = CHORE_CADENCES.map(([v, l]) => `<option value="${v}"${v === 'weekly' ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" id="chore-add-form">
+      <input type="text" class="te-input" data-f="title" placeholder="Chore (e.g. Take the bins out)">
+      <div class="row-edit-fields">
+        <label>Cadence<select data-f="cadence">${cadOpts}</select></label>
+        <label>Whose turn<select data-f="assignee_id">${choreAssigneeOptions('')}</select></label>
+        <label>Next due<input type="date" data-f="next_due" value="${todayIsoDate()}"></label>
+        <label class="row-edit-check"><input type="checkbox" data-f="rotate" checked> Auto-swap each time</label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-chore-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="chores-list">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderChores(chores) {
+  const list = document.getElementById('chores-list');
+  if (!list) return;
+  list.innerHTML = (chores && chores.length)
+    ? chores.map((c) => `<div class="maintenance-row" data-chore-id="${c.id}">${choreRowInner(c)}</div>`).join('')
+    : '<div class="vault-empty"><p>No chores yet</p><p class="hint-small">Add recurring jobs like bins, hoovering, or changing the bedding and they\'ll rotate between you.</p></div>';
+}
+
 function renderAppointments(data, filter = 'all', category = 'all') {
   const { users, appointments } = data;
   let filtered = appointments.filter((a) => filter === 'all' || a.status === filter);
@@ -4088,6 +4289,87 @@ function initActions() {
         .catch((err) => showToast(err.message, true));
       return;
     }
+    if (action === 'add-chore') {
+      const host = document.getElementById('chores-list');
+      if (host && !document.getElementById('chore-add-form')) {
+        host.insertAdjacentHTML('afterbegin', choreAddInner());
+        document.querySelector('#chore-add-form [data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-chore-new') {
+      const f = readInlineFields(document.getElementById('chore-add-form'));
+      if (!f.title || !f.title.trim()) { showToast('Chore needs a title', true); return; }
+      btn.disabled = true;
+      api('/chores', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: f.title.trim(),
+          cadence: f.cadence || 'weekly',
+          assignee_id: f.assignee_id || null,
+          rotate: !!f.rotate,
+          next_due: f.next_due || null,
+        }),
+      }).then(() => loadChores()).then(() => showToast('Chore added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-chore') {
+      const row = btn.closest('.maintenance-row');
+      const c = findChore(btn.dataset.choreId);
+      if (row && c) {
+        row.classList.add('editing');
+        row.innerHTML = choreEditInner(c);
+        row.querySelector('[data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-chore-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Chore needs a title', true); return; }
+      api(`/chores/${btn.dataset.choreId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: f.title.trim(),
+          cadence: f.cadence,
+          assignee_id: f.assignee_id || null,
+          rotate: !!f.rotate,
+          next_due: f.next_due || null,
+        }),
+      }).then(() => loadChores()).then(() => showToast('Chore updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-chore-inline') {
+      const row = btn.closest('.maintenance-row');
+      const c = findChore(btn.dataset.choreId);
+      if (row && c) {
+        row.classList.remove('editing');
+        row.innerHTML = choreRowInner(c);
+      }
+      return;
+    }
+    if (action === 'delete-chore') {
+      if (!confirm('Delete this chore?')) return;
+      api(`/chores/${btn.dataset.choreId}`, { method: 'DELETE' })
+        .then(() => loadChores()).then(() => showToast('Chore deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'chore-done') {
+      const choreId = btn.dataset.choreId;
+      if (!choreId) return;
+      btn.disabled = true;
+      api(`/chores/${choreId}/done`, { method: 'POST' })
+        .then((res) => {
+          const next = res?.chore?.assignee_name;
+          loadChores();
+          showToast(next ? `Done — ${next}'s turn next` : 'Chore done ✓');
+        })
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
     if (action === 'scan-receipt') {
       document.getElementById('receipt-file-input')?.click();
       return;
@@ -5029,9 +5311,11 @@ async function load() {
   if (finances) renderFinances(finances);
   loadInsights();   // Finances → Insights card (own endpoint)
   loadNetWorth();   // Finances → Net worth + assets (own endpoints)
+  loadTrends();     // Finances → Trends card: spend + net-worth charts (own endpoints)
   if (renewals) renderRenewals(renewals);
   if (maintenance) renderMaintenance(maintenance);
   renderTradespeople(tradespeople || { tradespeople: [] });
+  loadChores();     // Home care → Chores rotation card (own endpoint)
   if (appointments) renderAppointments(appointments);
   if (holidays) renderHolidays(holidays);
   if (media) renderMedia(media);

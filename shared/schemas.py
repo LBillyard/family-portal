@@ -357,3 +357,20 @@ class MealPlanUpsert(BaseModel):
     title: str
     ingredients: Optional[str] = ""
 
+
+class ChoreCreate(BaseModel):
+    title: str
+    cadence: str = "weekly"
+    assignee_id: Optional[str] = None
+    rotate: bool = True
+    next_due: Optional[str] = None
+
+
+class ChoreUpdate(BaseModel):
+    title: Optional[str] = None
+    cadence: Optional[str] = None
+    assignee_id: Optional[str] = None
+    rotate: Optional[bool] = None
+    next_due: Optional[str] = None
+    last_done: Optional[str] = None
+

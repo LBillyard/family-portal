@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=40">
+  <link rel="stylesheet" href="/static/style.css?v=41">
   <script>
     // No-flash theme guard: set the theme attribute before first paint.
     // 'system' (or unset) leaves the attribute off so prefers-color-scheme wins.
@@ -301,6 +301,20 @@
           </div>
         </div>
 
+        <div class="card" id="trends-card" style="margin:16px 0">
+          <div class="card-header"><h3>Trends</h3><p>Spending over the last 6 months &amp; your net-worth history</p></div>
+          <div class="trends-grid">
+            <div class="trend-block">
+              <h4 class="insight-subhead">Spending — last 6 months</h4>
+              <div id="trend-spend"></div>
+            </div>
+            <div class="trend-block">
+              <h4 class="insight-subhead">Net worth over time</h4>
+              <div id="trend-networth"></div>
+            </div>
+          </div>
+        </div>
+
         <div class="card" id="category-breakdown-card" style="margin:16px 0;display:none">
           <div class="card-header"><h3>Spending by category</h3><p>This month · excludes transfers, savings &amp; crypto</p></div>
           <div id="category-breakdown"></div>
@@ -441,6 +455,14 @@
             <button class="card-link-btn wf-action" data-action="add-tradesperson">+ Add</button>
           </div>
           <div id="tradespeople-list" class="maintenance-list" style="margin-top:16px"></div>
+        </div>
+
+        <div class="card" style="margin-top:28px">
+          <div class="card-header-row">
+            <div class="card-header"><h3>Chores</h3><p>Recurring jobs that rotate between you — bins, hoovering, changing the bedding</p></div>
+            <button class="card-link-btn wf-action" data-action="add-chore">+ Add chore</button>
+          </div>
+          <div id="chores-list" class="maintenance-list" style="margin-top:16px"></div>
         </div>
       </section>
 
@@ -709,6 +731,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=40"></script>
+  <script src="/static/app.js?v=41"></script>
 </body>
 </html>

@@ -82,6 +82,58 @@ def _month_totals(txns: list[dict], key: str) -> dict:
     return {"label": _label(key), "spend": round(spend, 2), "income": round(income, 2)}
 
 
+def _month_abbrev(month_key: str) -> str:
+    """'2026-07' -> 'Jul' (month abbreviation only, locale-independent)."""
+    try:
+        return _MONTHS[int(month_key[5:7])]
+    except (ValueError, IndexError):
+        return month_key
+
+
+def build_spend_trend(months: int = 6) -> dict:
+    """Spend per calendar month for the last `months` months.
+
+    The window ends at the latest month present in the data (so it lines up with the
+    insights headline, which also anchors to the data rather than the clock), falling
+    back to today's month when there are no transactions. Every month in the window is
+    included — even zero-spend months — so the chart has an even axis. Spend is the sum
+    of outgoing amounts (amount < 0) per month, as a positive figure rounded to 2dp.
+    """
+    months = max(1, int(months))
+    txns = db.list_transactions_for_analysis(limit=1000)
+
+    present = sorted({m for m in (_txn_month(t) for t in txns) if m})
+    if present:
+        anchor = present[-1]
+    else:
+        from datetime import date
+
+        anchor = date.today().isoformat()[:7]
+
+    # Build the ordered window of month keys ending at the anchor (oldest → newest).
+    keys: list[str] = [anchor]
+    for _ in range(months - 1):
+        keys.append(_prev_month_key(keys[-1]))
+    keys.reverse()
+
+    spend_by_key: dict[str, float] = {k: 0.0 for k in keys}
+    window = set(keys)
+    for t in txns:
+        key = _txn_month(t)
+        if key not in window:
+            continue
+        amount = t.get("amount") or 0
+        if amount < 0:
+            spend_by_key[key] += abs(amount)
+
+    return {
+        "months": [
+            {"key": k, "label": _month_abbrev(k), "spend": round(spend_by_key[k], 2)}
+            for k in keys
+        ]
+    }
+
+
 def build_insights() -> dict:
     txns = db.list_transactions_for_analysis(limit=1000)
     if not txns:

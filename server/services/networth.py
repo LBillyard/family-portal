@@ -45,6 +45,23 @@ def build_networth() -> dict:
         )
 
     net_worth = cash_total + assets_total - liabilities_total
+
+    # Record today's snapshot so net-worth history accrues every time anyone opens
+    # Finances (and whenever the Sunday recap job calls build_networth). One row per
+    # date, id-stable. Best-effort: never let snapshotting break the response.
+    try:
+        from datetime import date
+
+        db.upsert_networth_snapshot(
+            date.today().isoformat(),
+            round(net_worth, 2),
+            round(cash_total, 2),
+            round(assets_total, 2),
+            round(liabilities_total, 2),
+        )
+    except Exception:
+        pass
+
     return {
         "net_worth": round(net_worth, 2),
         "cash_total": round(cash_total, 2),
@@ -52,3 +69,18 @@ def build_networth() -> dict:
         "liabilities_total": round(liabilities_total, 2),
         "breakdown": breakdown,
     }
+
+
+def build_networth_trend(limit: int = 30) -> dict:
+    """Net-worth history for the trend chart: oldest→newest points plus the latest value.
+
+    Reads persisted daily snapshots (db.list_networth_snapshots returns ASC by date).
+    Empty points when there's no history yet.
+    """
+    snapshots = db.list_networth_snapshots(limit)
+    points = [
+        {"date": s.get("date"), "net_worth": s.get("net_worth")}
+        for s in snapshots
+    ]
+    current = points[-1]["net_worth"] if points else 0
+    return {"points": points, "current": current}

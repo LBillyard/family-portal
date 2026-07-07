@@ -4858,6 +4858,66 @@ dialog select:focus {
   white-space: nowrap;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Finances — Trend charts (inline SVG; all colours via CSS vars for dark mode)*/
+/* -------------------------------------------------------------------------- */
+.trends-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+@media (max-width: 720px) {
+  .trends-grid { grid-template-columns: 1fr; }
+}
+.trend-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: 200px;
+  overflow: visible;
+}
+.trend-bar { fill: var(--accent); transition: fill var(--transition); }
+.trend-bar:hover { fill: var(--accent-hover); }
+.trend-bar-val {
+  fill: var(--text-muted);
+  font-size: 9px;
+  font-weight: 600;
+  font-family: var(--font);
+}
+.trend-axis-label {
+  fill: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font);
+}
+.trend-axis-line { stroke: var(--border); stroke-width: 1; }
+.trend-area { fill: var(--accent); fill-opacity: 0.12; stroke: none; }
+.trend-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.trend-dot { fill: var(--accent); }
+
+/* -------------------------------------------------------------------------- */
+/* Home care — Chores rotation                                                */
+/* -------------------------------------------------------------------------- */
+.chore-turn-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  background: var(--accent-light);
+  color: var(--accent);
+}
+.chore-turn-badge.anyone { background: var(--surface-muted); color: var(--text-muted); }
+.chore-due.overdue { color: var(--red); font-weight: 700; }
+.chore-due.due-today { color: var(--amber); font-weight: 700; }
+.chore-rotate { color: var(--text-muted); }
+
 /* Large-transaction threshold input in notification prefs */
 .notif-pref-amount {
   display: inline-flex;
