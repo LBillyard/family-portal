@@ -31,8 +31,8 @@ def _trip_ended(trip: dict) -> bool:
         return False
 
 
-def build_briefing(user: dict | None = None) -> dict:
-    today = date.today()
+def build_briefing(user: dict | None = None, for_date: date | None = None) -> dict:
+    today = for_date or date.today()
     now = datetime.now()
     events = db.list_events()
     tasks = [t for t in db.list_tasks() if not t.get("done")]
@@ -119,15 +119,23 @@ def _next_due(day: int, today: date) -> date:
     return date(year, month, day)
 
 
-def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -> str:
+def whatsapp_digest_line(
+    user: dict | None = None,
+    weather: str | None = None,
+    for_date: date | None = None,
+) -> str:
     """One-line, newline-free digest for a WhatsApp template variable ({{1}}).
 
     Meta rejects template parameters containing newlines/tabs, so this uses
     ' · ' between sections and ', ' between items. Kept under ~1000 chars.
 
     `weather` (if provided) is appended as a leading section — pass the result of
-    server.services.weather.today_line(), fetched by the async caller."""
-    b = build_briefing(user)
+    server.services.weather.today_line(), fetched by the async caller.
+
+    `for_date` (defaults to today) selects which day the diary/appointments are for —
+    pass tomorrow's date for the evening wind-down digest. The diary is still split by
+    person and de-duplicated exactly as for today."""
+    b = build_briefing(user, for_date=for_date)
     today = date.fromisoformat(b["date"])
     date_str = f"{today.strftime('%A')} {today.day} {today.strftime('%b')}"
 

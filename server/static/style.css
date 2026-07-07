@@ -4406,3 +4406,74 @@ dialog select:focus {
   color: var(--text-muted, #94a3b8);
   margin-top: 2px;
 }
+
+/* Notifications & reminders settings card */
+.notif-pref-list {
+  display: flex;
+  flex-direction: column;
+}
+.notif-pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+}
+.notif-pref-row:last-child { border-bottom: none; }
+.notif-pref-master {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.notif-pref-text { display: flex; flex-direction: column; gap: 2px; }
+.notif-pref-text strong {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--navy-900);
+}
+.notif-pref-text small {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.notif-pref-row.disabled { cursor: default; }
+.notif-pref-row.disabled .notif-pref-text strong { color: var(--text-muted); }
+.notif-pref-row.disabled .notif-pref-toggle,
+.notif-pref-row.disabled .notif-pref-lead { opacity: 0.5; }
+.notif-pref-toggle {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.notif-pref-lead {
+  width: 72px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+/* Document expiry badge */
+.expiry-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+.expiry-badge.soon { background: var(--amber-bg); color: var(--amber); }
+.expiry-badge.expired { background: var(--red-bg); color: var(--red); }
+
+/* Tradespeople directory contact links */
+.trade-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+.trade-link:hover { text-decoration: underline; }

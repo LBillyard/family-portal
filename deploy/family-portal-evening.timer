@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Family Portal evening wind-down digest at 20:00 Europe/London
+
+[Timer]
+# Timezone-aware: fires at 20:00 UK local time (handles BST/GMT automatically).
+# Mirrors the morning digest convention (07:00 Europe/London) — expressing the
+# time as UK local means systemd resolves BST/GMT for us (20:00 BST = 19:00 UTC).
+OnCalendar=*-*-* 20:00:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target

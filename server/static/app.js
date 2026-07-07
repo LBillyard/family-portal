@@ -466,6 +466,7 @@ async function submitModal(key) {
           name: f['Document name'],
           category: DOC_CATEGORY_MAP[f['Category']] || 'other',
           expiry: f['Expiry date'] || '',
+          expiry_date: f['Expiry date'] || null,
           notes: f['Notes'] || '',
         }),
       });
@@ -1261,7 +1262,7 @@ function renderHome(data) {
       <div class="list-item">
         <div class="list-item-body">
           <div class="list-item-title">${esc(d.name)}</div>
-          <div class="list-item-meta">${esc(DOC_CATEGORY_LABELS[d.category] || d.category)}${d.expiry ? ' · ' + fmt.date(d.expiry) : ''}${d.has_file ? ' · 📎' : ''}</div>
+          <div class="list-item-meta">${esc(DOC_CATEGORY_LABELS[d.category] || d.category)}${docExpiryValue(d) ? ' · ' + fmt.date(docExpiryValue(d)) : ''}${d.has_file ? ' · 📎' : ''}</div>
         </div>
         <span class="status-tag ${docStatusClass(d.status)}">${docStatusLabel(d.status)}</span>
       </div>`
@@ -1701,6 +1702,25 @@ function docStatusClass(status) {
   return 'booked';
 }
 
+// Resolve a document's expiry from either the new (expiry_date) or legacy (expiry) field.
+function docExpiryValue(d) {
+  return d.expiry_date || d.expiry || '';
+}
+
+// Small client-side badge: amber when a document expires within ~30 days, red once it's past.
+function expiryBadge(dateStr) {
+  if (!dateStr) return '';
+  const target = new Date(dateStr);
+  if (isNaN(target.getTime())) return '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const day = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  const diff = Math.round((day - today) / 86400000);
+  if (diff < 0) return '<span class="expiry-badge expired">Expired</span>';
+  if (diff <= 30) return '<span class="expiry-badge soon">Expires soon</span>';
+  return '';
+}
+
 function renderDocuments(data, filter = vaultFilter) {
   const { documents = [], categories = [] } = data;
   const filtered =
@@ -1739,7 +1759,7 @@ function renderDocuments(data, filter = vaultFilter) {
         <h3 class="vault-card-title">${esc(d.name)}</h3>
         ${d.notes ? `<p class="vault-card-notes">${esc(d.notes)}</p>` : ''}
         <div class="vault-card-meta">
-          ${d.expiry ? `<span>Expires ${fmt.date(d.expiry)}</span>` : '<span>No expiry set</span>'}
+          ${docExpiryValue(d) ? `<span>Expires ${fmt.date(docExpiryValue(d))} ${expiryBadge(docExpiryValue(d))}</span>` : '<span>No expiry set</span>'}
           ${d.has_file ? `<span>${fmt.fileSize(d.file_size)}</span>` : '<span class="vault-no-file">No file yet</span>'}
         </div>
         <div class="vault-card-actions">
@@ -2017,6 +2037,72 @@ function renderMaintenance(data) {
   document.getElementById('maintenance-list').innerHTML = items.length
     ? items.map((m) => `<div class="maintenance-row" data-maint-id="${m.id}">${maintRowInner(m)}</div>`).join('')
     : '<div class="vault-empty"><p>No maintenance items yet.</p></div>';
+}
+
+function findTradesperson(id) {
+  return (store.tradespeople?.tradespeople || []).find((t) => String(t.id) === String(id));
+}
+
+function tradespersonRowInner(t) {
+  const telHref = (t.phone || '').replace(/[^\d+]/g, '');
+  const meta = [];
+  if (t.trade) meta.push(`<span>${esc(t.trade)}</span>`);
+  if (t.phone) meta.push(`<a href="tel:${esc(telHref)}" class="trade-link">📞 ${esc(t.phone)}</a>`);
+  if (t.email) meta.push(`<a href="mailto:${esc(t.email)}" class="trade-link">✉️ ${esc(t.email)}</a>`);
+  return `
+        <div>
+          <strong>${esc(t.name)}</strong>
+          <div class="subscription-meta">${meta.join('') || '<span class="hint-small">No contact details yet</span>'}</div>
+          ${t.notes ? `<p class="hint-small">${esc(t.notes)}</p>` : ''}
+        </div>
+        <div class="subscription-actions">
+          <button class="bill-edit-btn wf-action" data-action="edit-tradesperson" data-trade-id="${t.id}" title="Edit contact" aria-label="Edit contact">✎</button>
+        </div>`;
+}
+
+// Inline edit form for a tradesperson row — mirrors the maintenance-row pattern.
+function tradespersonEditInner(t) {
+  return `
+    <div class="row-edit" data-trade-id="${t.id}">
+      <input type="text" class="te-input" data-f="name" value="${esc(t.name)}" placeholder="Name">
+      <div class="row-edit-fields">
+        <label>Trade<input type="text" data-f="trade" value="${esc(t.trade || '')}" placeholder="e.g. Plumber"></label>
+        <label>Phone<input type="tel" data-f="phone" value="${esc(t.phone || '')}" placeholder="07700 900123"></label>
+        <label>Email<input type="email" data-f="email" value="${esc(t.email || '')}" placeholder="name@example.com"></label>
+        <label>Notes<input type="text" data-f="notes" value="${esc(t.notes || '')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-tradesperson-inline" data-trade-id="${t.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-tradesperson-inline" data-trade-id="${t.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-tradesperson" data-trade-id="${t.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function tradespersonAddInner() {
+  return `
+    <div class="row-edit" id="tradesperson-add-form">
+      <input type="text" class="te-input" data-f="name" placeholder="Name (e.g. Dave the plumber)">
+      <div class="row-edit-fields">
+        <label>Trade<input type="text" data-f="trade" placeholder="e.g. Plumber"></label>
+        <label>Phone<input type="tel" data-f="phone" placeholder="07700 900123"></label>
+        <label>Email<input type="email" data-f="email" placeholder="name@example.com"></label>
+        <label>Notes<input type="text" data-f="notes" placeholder="Fitted the boiler in 2024"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-tradesperson-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="tradespeople-list">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderTradespeople(data) {
+  const list = document.getElementById('tradespeople-list');
+  if (!list) return;
+  const items = data?.tradespeople || [];
+  list.innerHTML = items.length
+    ? items.map((t) => `<div class="maintenance-row" data-trade-id="${t.id}">${tradespersonRowInner(t)}</div>`).join('')
+    : '<div class="vault-empty"><p>No tradespeople saved yet.</p><p class="hint-small">Add plumbers, electricians and other trusted contacts — tap a number to call.</p></div>';
 }
 
 function renderMergedRecurring(data) {
@@ -2371,6 +2457,7 @@ function renderSettings(data) {
       <p>SMTP alerts before documents &amp; policies expire — ${integrations.email ? 'configured' : 'add SMTP_* and NOTIFY_EMAIL to .env'}.</p>
       <button class="btn btn-sm btn-primary wf-action" data-action="send-reminders" ${integrations.email ? '' : 'disabled'}>Send test reminders</button>
     </div>
+    <div class="settings-section" id="notif-prefs-section" hidden></div>
     <div class="settings-section">
       <h3>Household members</h3>
       <p>Colour labels used across calendar, tasks and appointments.</p>
@@ -2409,6 +2496,89 @@ function renderSettings(data) {
 
   const pill = document.getElementById('sync-pill');
   if (pill) pill.innerHTML = `<span class="sync-dot"></span> ${sync.last_sync ? 'Synced ' + fmt.relative(sync.last_sync) : 'Not synced yet'}`;
+}
+
+// --- Notifications & reminders settings card ---
+let notifPrefs = null;
+
+const NOTIF_PREF_ROWS = [
+  ['morning_digest', 'Morning digest', 'A short summary each morning'],
+  ['evening_digest', 'Evening digest', 'A wrap-up each evening'],
+  ['appointment_reminders', 'Appointment reminders', 'Ahead of health, dental, car & vet visits'],
+  ['bill_reminders', 'Bill reminders', 'Before recurring bills fall due'],
+  ['renewal_reminders', 'Renewal reminders', 'Insurance, MOT and other renewals'],
+  ['document_expiry_reminders', 'Document expiry', 'When a vault document is about to expire'],
+];
+
+// Fetch notification preferences and render the settings card. Hides the card
+// gracefully if the endpoint is missing (older backend) or errors.
+async function loadNotificationPrefs() {
+  const section = document.getElementById('notif-prefs-section');
+  if (!section) return;
+  try {
+    notifPrefs = await api('/notifications/prefs');
+    renderNotificationPrefs(notifPrefs);
+  } catch {
+    notifPrefs = null;
+    section.hidden = true;
+    section.innerHTML = '';
+  }
+}
+
+function renderNotificationPrefs(prefs) {
+  const section = document.getElementById('notif-prefs-section');
+  if (!section || !prefs) return;
+  section.hidden = false;
+  const master = !!prefs.master_enabled;
+  const lead = Number.isFinite(prefs.reminder_lead_days) ? prefs.reminder_lead_days : 3;
+  const rows = NOTIF_PREF_ROWS.map(([key, label, desc]) => `
+      <label class="notif-pref-row${master ? '' : ' disabled'}">
+        <span class="notif-pref-text"><strong>${label}</strong><small>${desc}</small></span>
+        <input type="checkbox" class="notif-pref-toggle" data-pref="${key}"${prefs[key] ? ' checked' : ''}${master ? '' : ' disabled'}>
+      </label>`).join('');
+  section.innerHTML = `
+    <h3>Notifications &amp; reminders</h3>
+    <p>Decide what The Hub sends you. Turn the master switch off to pause everything without losing your choices.</p>
+    <div class="notif-pref-list">
+      <label class="notif-pref-row notif-pref-master">
+        <span class="notif-pref-text"><strong>All notifications</strong><small>Master switch — off silences every reminder below</small></span>
+        <input type="checkbox" class="notif-pref-toggle" data-pref="master_enabled"${master ? ' checked' : ''}>
+      </label>
+      ${rows}
+      <label class="notif-pref-row${master ? '' : ' disabled'}">
+        <span class="notif-pref-text"><strong>Remind me this many days ahead</strong><small>How far in advance reminders arrive</small></span>
+        <input type="number" min="0" max="60" class="notif-pref-lead" data-pref="reminder_lead_days" value="${lead}"${master ? '' : ' disabled'}>
+      </label>
+    </div>`;
+}
+
+// PATCH a single preference immediately (optimistic) and toast "Saved".
+async function handleNotifPrefChange(el) {
+  if (!notifPrefs) return;
+  const key = el.dataset.pref;
+  let value;
+  if (el.type === 'checkbox') {
+    value = el.checked;
+  } else {
+    value = parseInt(el.value, 10);
+    if (!Number.isFinite(value) || value < 0) value = 0;
+    if (value > 60) value = 60;
+    el.value = value;
+  }
+  notifPrefs[key] = value;
+  // The master switch enables/disables everything else — re-render for instant feedback.
+  if (key === 'master_enabled') renderNotificationPrefs(notifPrefs);
+  try {
+    const updated = await api('/notifications/prefs', { method: 'PATCH', body: JSON.stringify({ [key]: value }) });
+    if (updated && typeof updated === 'object') {
+      notifPrefs = updated;
+      if (key === 'master_enabled') renderNotificationPrefs(notifPrefs);
+    }
+    showToast('Saved');
+  } catch (err) {
+    showToast(err.message, true);
+    loadNotificationPrefs(); // re-sync the card with the server on failure
+  }
 }
 
 function openSearchModal() {
@@ -3263,6 +3433,74 @@ function initActions() {
         .catch((err) => showToast(err.message, true));
       return;
     }
+    if (action === 'add-tradesperson') {
+      const host = document.getElementById('tradespeople-list');
+      if (host && !document.getElementById('tradesperson-add-form')) {
+        host.insertAdjacentHTML('afterbegin', tradespersonAddInner());
+        document.querySelector('#tradesperson-add-form [data-f="name"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-tradesperson-new') {
+      const f = readInlineFields(document.getElementById('tradesperson-add-form'));
+      if (!f.name || !f.name.trim()) { showToast('Contact needs a name', true); return; }
+      btn.disabled = true;
+      api('/tradespeople', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: f.name.trim(),
+          trade: (f.trade || '').trim() || null,
+          phone: (f.phone || '').trim() || null,
+          email: (f.email || '').trim() || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => load()).then(() => showToast('Contact added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-tradesperson') {
+      const row = btn.closest('.maintenance-row');
+      const t = findTradesperson(btn.dataset.tradeId);
+      if (row && t) {
+        row.classList.add('editing');
+        row.innerHTML = tradespersonEditInner(t);
+        row.querySelector('[data-f="name"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-tradesperson-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.name || !f.name.trim()) { showToast('Contact needs a name', true); return; }
+      api(`/tradespeople/${btn.dataset.tradeId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: f.name.trim(),
+          trade: (f.trade || '').trim() || null,
+          phone: (f.phone || '').trim() || null,
+          email: (f.email || '').trim() || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => load()).then(() => showToast('Contact updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-tradesperson-inline') {
+      const row = btn.closest('.maintenance-row');
+      const t = findTradesperson(btn.dataset.tradeId);
+      if (row && t) {
+        row.classList.remove('editing');
+        row.innerHTML = tradespersonRowInner(t);
+      }
+      return;
+    }
+    if (action === 'delete-tradesperson') {
+      if (!confirm('Delete this contact?')) return;
+      api(`/tradespeople/${btn.dataset.tradeId}`, { method: 'DELETE' })
+        .then(() => load()).then(() => showToast('Contact deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
     if (action === 'scan-receipt') {
       document.getElementById('receipt-file-input')?.click();
       return;
@@ -3335,6 +3573,13 @@ function initActions() {
 
   // Recategorise a transaction (and learn the merchant) when its dropdown changes
   document.addEventListener('change', (e) => {
+    // Notification preference toggles / lead-days — PATCH immediately.
+    const prefEl = e.target.closest('[data-pref]');
+    if (prefEl) {
+      handleNotifPrefChange(prefEl);
+      return;
+    }
+
     // Calendar member-filter chips
     const filterCb = e.target.closest('#cal-filters input[type="checkbox"][data-user-id]');
     if (filterCb) {
@@ -3433,6 +3678,7 @@ function initActions() {
     formData.append('name', form.name.value.trim());
     formData.append('category', form.category.value);
     formData.append('expiry', form.expiry.value);
+    if (form.expiry.value) formData.append('expiry_date', form.expiry.value);
     formData.append('notes', form.notes.value.trim());
     try {
       showToast('Uploading…');
@@ -3932,7 +4178,7 @@ async function load() {
 
   loadWeather();  // refresh header forecast (also picks up holiday-location changes)
 
-  const keys = ['dashboard', 'calendar', 'finances', 'appointments', 'holidays', 'documents', 'media', 'subscriptions', 'settings', 'briefing', 'activity', 'renewals', 'maintenance', 'memory'];
+  const keys = ['dashboard', 'calendar', 'finances', 'appointments', 'holidays', 'documents', 'media', 'subscriptions', 'settings', 'briefing', 'activity', 'renewals', 'maintenance', 'memory', 'tradespeople'];
   const results = await Promise.allSettled(keys.map((k) => api(`/${k}`)));
 
   store = {};
@@ -3942,7 +4188,7 @@ async function load() {
     else failed.push(keys[i]);
   });
 
-  const { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance, memory } = store;
+  const { dashboard, calendar, finances, appointments, holidays, documents, media, subscriptions, settings, briefing, activity, renewals, maintenance, memory, tradespeople } = store;
 
   renderActionGrid();
   if (dashboard) {
@@ -3958,13 +4204,14 @@ async function load() {
   if (finances) renderFinances(finances);
   if (renewals) renderRenewals(renewals);
   if (maintenance) renderMaintenance(maintenance);
+  renderTradespeople(tradespeople || { tradespeople: [] });
   if (appointments) renderAppointments(appointments);
   if (holidays) renderHolidays(holidays);
   if (media) renderMedia(media);
   if (subscriptions) renderSubscriptions(subscriptions);
   if (documents) renderDocuments(documents);
   if (memory) renderMemory(memory);
-  if (settings) renderSettings(settings);
+  if (settings) { renderSettings(settings); loadNotificationPrefs(); }
 
   failed.forEach(markSectionFailed);
   if (failed.length) console.error('Failed to load:', failed.join(', '));

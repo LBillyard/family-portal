@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Family Portal reminders at 08:00, 13:00 and 18:00 Europe/London
+
+[Timer]
+# Timezone-aware: fires three times through the waking day, UK local time
+# (handles BST/GMT automatically). Multiple OnCalendar lines accumulate.
+OnCalendar=*-*-* 08:00:00 Europe/London
+OnCalendar=*-*-* 13:00:00 Europe/London
+OnCalendar=*-*-* 18:00:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target

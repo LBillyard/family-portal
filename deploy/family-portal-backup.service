@@ -1,0 +1,14 @@
+[Unit]
+Description=The Hub — daily SQLite database backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/family-portal
+Environment=PYTHONUNBUFFERED=1
+Environment=ENV=production
+EnvironmentFile=-/opt/family-portal/.env
+ExecStart=/bin/bash /opt/family-portal/deploy/backup-db.sh

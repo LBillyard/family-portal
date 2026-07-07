@@ -49,12 +49,15 @@ from shared.schemas import (
     MemoryCreate,
     MemoryImport,
     MemoryUpdate,
+    NotificationPrefsUpdate,
     SavingsGoalCreate,
     SavingsGoalUpdate,
     SearchQuery,
     SubscriptionUpdate,
     TaskCreate,
     TaskUpdate,
+    TradespersonCreate,
+    TradespersonUpdate,
     TransactionCreate,
     TransferCreate,
     TripCreate,
@@ -1202,6 +1205,49 @@ def send_reminders(_: dict = Depends(require_user)):
 @router.get("/notifications/log")
 def notification_log(_: dict = Depends(require_user)):
     return {"items": db.list_notification_log()}
+
+
+# --- Notification preferences ---
+
+@router.get("/notifications/prefs")
+def get_notification_prefs(_: dict = Depends(require_user)):
+    return db.get_notification_prefs()
+
+
+@router.patch("/notifications/prefs")
+def update_notification_prefs(body: NotificationPrefsUpdate, _: dict = Depends(require_user)):
+    return db.update_notification_prefs(body.model_dump(exclude_unset=True))
+
+
+# --- Tradespeople (household contacts directory) ---
+
+@router.get("/tradespeople")
+def list_tradespeople(_: dict = Depends(require_user)):
+    return {"tradespeople": db.list_tradespeople()}
+
+
+@router.post("/tradespeople")
+def create_tradesperson(body: TradespersonCreate, user: dict = Depends(require_user)):
+    person = db.create_tradesperson(body.model_dump())
+    activity_svc.log(user, "created", "tradesperson", f"Added contact: {person['name']}", entity_id=person["id"])
+    return person
+
+
+@router.patch("/tradespeople/{person_id}")
+def update_tradesperson(person_id: str, body: TradespersonUpdate, user: dict = Depends(require_user)):
+    person = db.update_tradesperson(person_id, body.model_dump(exclude_unset=True))
+    if not person:
+        raise HTTPException(status_code=404, detail="Tradesperson not found")
+    activity_svc.log(user, "updated", "tradesperson", f"Updated contact: {person['name']}", entity_id=person_id)
+    return person
+
+
+@router.delete("/tradespeople/{person_id}")
+def delete_tradesperson(person_id: str, user: dict = Depends(require_user)):
+    if not db.delete_tradesperson(person_id):
+        raise HTTPException(status_code=404, detail="Tradesperson not found")
+    activity_svc.log(user, "deleted", "tradesperson", "Removed contact", entity_id=person_id)
+    return {"ok": True}
 
 
 # --- Tasks & documents ---

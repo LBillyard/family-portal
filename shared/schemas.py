@@ -216,6 +216,7 @@ class DocumentCreate(BaseModel):
     name: str
     category: str = "other"
     expiry: Optional[str] = ""
+    expiry_date: Optional[str] = None
     notes: Optional[str] = ""
 
 
@@ -276,4 +277,31 @@ class ChecklistToggleRequest(BaseModel):
     item_id: Optional[str] = None  # checklist row id, or the item's label
     label: Optional[str] = None
     item_type: Literal["checklist", "packing"] = "checklist"
+
+
+class NotificationPrefsUpdate(BaseModel):
+    master_enabled: Optional[bool] = None
+    morning_digest: Optional[bool] = None
+    evening_digest: Optional[bool] = None
+    appointment_reminders: Optional[bool] = None
+    bill_reminders: Optional[bool] = None
+    renewal_reminders: Optional[bool] = None
+    document_expiry_reminders: Optional[bool] = None
+    reminder_lead_days: Optional[int] = Field(default=None, ge=0, le=30)
+
+
+class TradespersonCreate(BaseModel):
+    name: str = Field(min_length=1)
+    trade: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class TradespersonUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1)
+    trade: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
 

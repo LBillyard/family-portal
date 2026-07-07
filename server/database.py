@@ -281,6 +281,37 @@ def init_db() -> None:
                 notes TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
             );
+
+            -- Household-level notification/digest preferences (a single row).
+            CREATE TABLE IF NOT EXISTS notification_prefs (
+                id TEXT PRIMARY KEY,
+                master_enabled INTEGER NOT NULL DEFAULT 1,
+                morning_digest INTEGER NOT NULL DEFAULT 1,
+                evening_digest INTEGER NOT NULL DEFAULT 0,
+                appointment_reminders INTEGER NOT NULL DEFAULT 1,
+                bill_reminders INTEGER NOT NULL DEFAULT 1,
+                renewal_reminders INTEGER NOT NULL DEFAULT 1,
+                document_expiry_reminders INTEGER NOT NULL DEFAULT 1,
+                reminder_lead_days INTEGER NOT NULL DEFAULT 2,
+                updated_at TEXT
+            );
+
+            -- Dedupe ledger so any given reminder is only ever sent once.
+            CREATE TABLE IF NOT EXISTS sent_notifications (
+                key TEXT PRIMARY KEY,
+                sent_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS tradespeople (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                trade TEXT,
+                phone TEXT,
+                email TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -339,6 +370,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("file_size", "ALTER TABLE documents ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"),
         ("uploaded_at", "ALTER TABLE documents ADD COLUMN uploaded_at TEXT"),
         ("user_id", "ALTER TABLE documents ADD COLUMN user_id TEXT"),
+        ("expiry_date", "ALTER TABLE documents ADD COLUMN expiry_date TEXT"),
     ]:
         if col not in dcols:
             conn.execute(ddl)
@@ -1678,6 +1710,7 @@ def _document_out(row: dict) -> dict:
     d["has_file"] = bool(d.get("file_path"))
     d["status"] = _document_status(d.get("expiry") or "", d.get("status", "ok"))
     d["file_size"] = d.get("file_size") or 0
+    d["expiry_date"] = d.get("expiry_date")
     return d
 
 
@@ -1707,8 +1740,8 @@ def create_document(data: dict) -> dict:
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO documents
-               (id, name, category, expiry, status, notes, file_name, file_path, mime_type, file_size, uploaded_at, user_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, name, category, expiry, status, notes, file_name, file_path, mime_type, file_size, uploaded_at, user_id, expiry_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 did,
                 data["name"],
@@ -1722,6 +1755,7 @@ def create_document(data: dict) -> dict:
                 data.get("file_size", 0),
                 data.get("uploaded_at", now if data.get("file_path") else None),
                 data.get("user_id"),
+                data.get("expiry_date") or None,
             ),
         )
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (did,)).fetchone()
@@ -1737,6 +1771,29 @@ def delete_document(doc_id: str) -> tuple[bool, Optional[str]]:
             return False, None
         conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
         return True, row["file_path"]
+
+
+def documents_expiring_within(days: int) -> list[dict]:
+    """Documents whose expiry_date falls within `days` from today. Includes ones
+    that lapsed at most 1 day ago (a small grace window) but nothing older, so a
+    reminder can still fire the day something expires."""
+    today = date.today()
+    horizon = today + timedelta(days=days)
+    floor = today - timedelta(days=1)
+    out: list[dict] = []
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM documents WHERE expiry_date IS NOT NULL AND expiry_date != '' ORDER BY expiry_date, name"
+        ).fetchall()
+        for r in rows:
+            d = row_to_dict(r)
+            try:
+                exp = date.fromisoformat(str(d["expiry_date"])[:10])
+            except (TypeError, ValueError):
+                continue
+            if floor <= exp <= horizon:
+                out.append(_document_out(d))
+    return out
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -2627,3 +2684,155 @@ def list_written_google_event_ids() -> set[str]:
             "SELECT google_event_id_written FROM events WHERE google_event_id_written IS NOT NULL"
         ).fetchall()
         return {r["google_event_id_written"] for r in rows}
+
+
+# --- Notification preferences (household-level, single row) ---
+
+_PREFS_ID = "household"
+_PREFS_BOOL_FIELDS = (
+    "master_enabled",
+    "morning_digest",
+    "evening_digest",
+    "appointment_reminders",
+    "bill_reminders",
+    "renewal_reminders",
+    "document_expiry_reminders",
+)
+
+
+def _prefs_out(r: dict) -> dict:
+    out: dict[str, Any] = {"id": r["id"]}
+    for f in _PREFS_BOOL_FIELDS:
+        out[f] = bool(r[f])
+    out["reminder_lead_days"] = int(r["reminder_lead_days"])
+    out["updated_at"] = r.get("updated_at")
+    return out
+
+
+def get_notification_prefs() -> dict:
+    """The single household prefs row, creating it with defaults on first call."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM notification_prefs WHERE id = ?", (_PREFS_ID,)).fetchone()
+        if not row:
+            conn.execute(
+                "INSERT INTO notification_prefs (id, updated_at) VALUES (?, ?)", (_PREFS_ID, _utcnow())
+            )
+            row = conn.execute("SELECT * FROM notification_prefs WHERE id = ?", (_PREFS_ID,)).fetchone()
+        return _prefs_out(row_to_dict(row))
+
+
+def update_notification_prefs(data: dict) -> dict:
+    """Update any subset of the prefs (bools accept truthy). Returns the fresh row."""
+    get_notification_prefs()  # ensure the row exists before we UPDATE it
+    fields, values = [], []
+    for f in _PREFS_BOOL_FIELDS:
+        if f in data and data[f] is not None:
+            fields.append(f"{f} = ?")
+            values.append(1 if data[f] else 0)
+    if data.get("reminder_lead_days") is not None:
+        fields.append("reminder_lead_days = ?")
+        values.append(int(data["reminder_lead_days"]))
+    with get_conn() as conn:
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(_PREFS_ID)
+            conn.execute(f"UPDATE notification_prefs SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM notification_prefs WHERE id = ?", (_PREFS_ID,)).fetchone()
+        return _prefs_out(row_to_dict(row))
+
+
+# --- Sent-notification dedupe ledger (a reminder is only ever sent once) ---
+
+def was_notified(key: str) -> bool:
+    with get_conn() as conn:
+        row = conn.execute("SELECT 1 FROM sent_notifications WHERE key = ?", (key,)).fetchone()
+        return row is not None
+
+
+def mark_notified(key: str) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO sent_notifications (key, sent_at) VALUES (?, ?)", (key, _utcnow())
+        )
+
+
+def prune_notifications(older_than_days: int = 90) -> int:
+    """Housekeeping: drop dedupe rows older than `older_than_days`. Returns rows deleted."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM sent_notifications WHERE sent_at < ?", (cutoff,))
+        return cur.rowcount
+
+
+# --- Tradespeople directory ---
+
+def _tradesperson_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "trade": r.get("trade"),
+        "phone": r.get("phone"),
+        "email": r.get("email"),
+        "notes": r.get("notes"),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_tradespeople() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM tradespeople ORDER BY trade, name").fetchall()
+        return [_tradesperson_out(row_to_dict(r)) for r in rows]
+
+
+def get_tradesperson(tradesperson_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM tradespeople WHERE id = ?", (tradesperson_id,)).fetchone()
+        return _tradesperson_out(row_to_dict(row)) if row else None
+
+
+def create_tradesperson(data: dict) -> dict:
+    tid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO tradespeople (id, name, trade, phone, email, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                tid,
+                data["name"],
+                data.get("trade"),
+                data.get("phone"),
+                data.get("email"),
+                data.get("notes"),
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM tradespeople WHERE id = ?", (tid,)).fetchone()
+        return _tradesperson_out(row_to_dict(row))
+
+
+def update_tradesperson(tradesperson_id: str, data: dict) -> Optional[dict]:
+    fields, values = [], []
+    for key in ("name", "trade", "phone", "email", "notes"):
+        if key in data and data[key] is not None:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM tradespeople WHERE id = ?", (tradesperson_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(tradesperson_id)
+            conn.execute(f"UPDATE tradespeople SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM tradespeople WHERE id = ?", (tradesperson_id,)).fetchone()
+        return _tradesperson_out(row_to_dict(row))
+
+
+def delete_tradesperson(tradesperson_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM tradespeople WHERE id = ?", (tradesperson_id,))
+        return cur.rowcount > 0
