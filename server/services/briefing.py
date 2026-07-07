@@ -131,37 +131,52 @@ def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -
     today = date.fromisoformat(b["date"])
     date_str = f"{today.strftime('%A')} {today.day} {today.strftime('%b')}"
 
-    # Diary = today's events + appointments, ordered by time.
-    diary = [(_hhmm(e["start"]), e["title"]) for e in b["today_events"]]
-    diary += [(_hhmm(a["datetime"]), a["title"]) for a in b["today_appointments"]]
-    diary.sort(key=lambda x: x[0] or "zz")
+    # Diary, SPLIT BY PERSON: the recipient's day first, then the other member's,
+    # so it's clear who has what booked. Events/appointments carry a user_id.
+    users = db.list_users()
+    me_id = user["id"] if user else None
+    other = next((u for u in users if u["id"] != me_id), None)
+
+    raw = [(_hhmm(e["start"]), e["title"], e.get("user_id")) for e in b["today_events"]]
+    raw += [(_hhmm(a["datetime"]), a["title"], a.get("user_id")) for a in b["today_appointments"]]
+    raw.sort(key=lambda x: x[0] or "zz")
     # Drop duplicates — the same meeting often syncs from more than one calendar.
     seen: set = set()
-    deduped = []
-    for tm, ti in diary:
-        key = (tm.strip(), (ti or "").strip().lower())
+    items = []
+    for tm, ti, uid in raw:
+        key = (tm.strip(), (ti or "").strip().lower(), uid)
         if key in seen:
             continue
         seen.add(key)
-        deduped.append((tm, ti))
-    diary = deduped
+        items.append((tm, ti, uid))
+
+    def _fmt(pairs) -> str:
+        return ", ".join(f"{tm}{ti}".strip() for tm, ti in pairs[:6]) or "nothing booked"
+
+    if me_id:
+        mine = [(tm, ti) for tm, ti, uid in items if uid == me_id]
+        theirs = [(tm, ti) for tm, ti, uid in items if other and uid == other["id"]]
+        shared = [(tm, ti) for tm, ti, uid in items if uid != me_id and not (other and uid == other["id"])]
+        diary_sections = [f"📅 You: {_fmt(mine)}"]
+        if other:
+            diary_sections.append(f"👤 {other['name']}: {_fmt(theirs)}")
+        if shared:
+            diary_sections.append(f"👥 Also: {_fmt(shared)}")
+    else:
+        combined = [(tm, ti) for tm, ti, _ in items]
+        diary_sections = ["📅 " + (_fmt(combined) if combined else "Nothing in the diary")]
 
     # Outstanding tasks: open tasks, prioritising anything due today or overdue.
     open_tasks = [t for t in db.list_tasks() if not t.get("done")]
     due_now = [t for t in open_tasks if t.get("due") and t["due"][:10] <= today.isoformat()]
     task_list = due_now or open_tasks
-
-    if diary:
-        diary_part = "📅 " + ", ".join(f"{tm}{ti}".strip() for tm, ti in diary[:6])
-    else:
-        diary_part = "📅 Nothing in the diary"
     if task_list:
         task_part = "✅ " + ", ".join(t["title"] for t in task_list[:6])
     else:
         task_part = "✅ No outstanding tasks"
 
     sections = [weather] if weather else []
-    sections += [diary_part, task_part]
+    sections += diary_sections + [task_part]
 
     # Bills due within the next week (unpaid).
     bills_due = []
