@@ -4979,6 +4979,100 @@ dialog select:focus {
 .warranty-pill.active { background: var(--green-bg); color: var(--green); }
 .warranty-pill.none { color: var(--text-muted); }
 
+/* Shared: full-width inline-edit field + textarea (recipe ingredients/method) */
+.row-edit-fields label.row-edit-full { flex-basis: 100%; }
+.row-edit-fields textarea {
+  padding: 6px 8px; font-size: 0.8125rem; font-family: var(--font);
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-raised); color: var(--text);
+  resize: vertical; min-height: 56px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Home — Recipe book                                                         */
+/* Reuses .maintenance-row + .row-edit; chips/plan control use semantic vars.  */
+/* -------------------------------------------------------------------------- */
+.recipe-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.recipe-title { font-weight: 700; color: var(--navy-900); }
+.recipe-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.recipe-chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 9px; border-radius: 999px;
+  font-size: 0.6875rem; font-weight: 600;
+  background: var(--accent-light); color: var(--accent);
+}
+.recipe-serves { font-size: 0.75rem; color: var(--text-muted); }
+.recipe-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.recipe-plan-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 8px; padding: 10px 12px;
+  background: var(--surface-muted); border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+}
+.recipe-plan-date {
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
+  font-size: 0.8125rem; font-family: var(--font);
+  background: var(--bg-white); color: var(--text);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Home care — Little ones (dependents + care items)                          */
+/* Status colours (overdue/soon) use --red/--amber so they read in dark mode.  */
+/* -------------------------------------------------------------------------- */
+.dependent-panel {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+.dependent-panel + .dependent-panel { margin-top: 14px; }
+.dependent-panel.editing { background: var(--surface); }
+.dependent-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dependent-ident { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.dependent-emoji {
+  font-size: 1.5rem; line-height: 1;
+  width: 44px; height: 44px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface); border: 1px solid var(--border-light); border-radius: 12px;
+}
+.dependent-name { font-weight: 700; color: var(--navy-900); font-size: 1rem; }
+.dependent-meta { font-size: 0.8125rem; color: var(--text-muted); }
+.dependent-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.dependent-notes { margin-top: 8px; }
+.care-list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.care-empty { margin: 4px 0 0; }
+.care-row {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--border-light);
+  border-radius: 10px;
+}
+.care-row.done { opacity: 0.6; }
+.care-row.done .care-title { text-decoration: line-through; }
+.care-main { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.care-emoji { font-size: 1.05rem; line-height: 1.35; flex-shrink: 0; }
+.care-body { min-width: 0; }
+.care-title { font-weight: 600; color: var(--navy-900); }
+.care-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 2px; }
+.care-notes { font-size: 0.75rem; color: var(--text-muted); }
+.care-due {
+  font-size: 0.75rem; font-weight: 700;
+  padding: 1px 9px; border-radius: 999px;
+  background: var(--surface-muted); color: var(--text-muted);
+  white-space: nowrap;
+}
+.care-due.overdue { background: var(--red-bg); color: var(--red); }
+.care-due.soon { background: var(--amber-bg); color: var(--amber); }
+.care-due.future,
+.care-due.none { background: var(--surface-muted); color: var(--text-muted); }
+.care-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.care-done-badge {
+  font-size: 0.6875rem; font-weight: 700;
+  padding: 2px 10px; border-radius: 999px;
+  background: var(--green-bg); color: var(--green);
+  white-space: nowrap;
+}
+
 /* Large-transaction threshold input in notification prefs */
 .notif-pref-amount {
   display: inline-flex;

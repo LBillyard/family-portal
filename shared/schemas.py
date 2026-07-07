@@ -414,3 +414,53 @@ class InventoryUpdate(BaseModel):
     warranty_expiry: Optional[str] = None
     notes: Optional[str] = None
 
+
+class RecipeCreate(BaseModel):
+    title: str
+    ingredients: Optional[str] = ""
+    method: Optional[str] = ""
+    tags: Optional[str] = ""
+    serves: Optional[int] = None
+
+
+class RecipeUpdate(BaseModel):
+    title: Optional[str] = None
+    ingredients: Optional[str] = None
+    method: Optional[str] = None
+    tags: Optional[str] = None
+    serves: Optional[int] = None
+
+
+class DependentCreate(BaseModel):
+    name: str
+    kind: str = "child"
+    dob: Optional[str] = None
+    breed: Optional[str] = None
+    notes: Optional[str] = ""
+
+
+class DependentUpdate(BaseModel):
+    name: Optional[str] = None
+    kind: Optional[str] = None
+    dob: Optional[str] = None
+    breed: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class CareItemCreate(BaseModel):
+    dependent_id: str
+    title: str
+    category: str = "other"
+    due_date: Optional[str] = None
+    done: Optional[bool] = False
+    notes: Optional[str] = ""
+
+
+class CareItemUpdate(BaseModel):
+    dependent_id: Optional[str] = None
+    title: Optional[str] = None
+    category: Optional[str] = None
+    due_date: Optional[str] = None
+    done: Optional[bool] = None
+    notes: Optional[str] = None
+

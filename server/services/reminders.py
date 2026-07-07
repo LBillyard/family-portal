@@ -299,4 +299,24 @@ async def run_reminders() -> dict:
                 _push("Warranty ending", body, badge=alerts)
                 db.mark_notified(key)
 
+    # --- Care due (children & pets): vaccinations, check-ups, grooming, etc. Neutral
+    #     wording covers both. Gated by the master switch only (checked at the top). ---
+    for ci in db.care_due_within(lead):
+        checked += 1
+        key = f"care:{ci['id']}:{ci.get('due_date')}"
+        if db.was_notified(key):
+            continue
+        try:
+            when = _fmt_date(date.fromisoformat(str(ci.get('due_date'))[:10]))
+        except (TypeError, ValueError):
+            when = "soon"
+        who = ci.get('dependent_name') or ''
+        lead_txt = f"{who}: " if who else ""
+        body = f"🐾 Care due — {lead_txt}{ci['title']} ({when})"
+        if await _remind_household(_household(), body):
+            sent += len(_household())
+            alerts += 1
+            _push("Care due", body, badge=alerts)
+            db.mark_notified(key)
+
     return {"sent": sent, "checked": checked}

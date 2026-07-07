@@ -408,6 +408,43 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Recipe box: free-text ingredients/method, comma-tagged.
+            CREATE TABLE IF NOT EXISTS recipes (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                ingredients TEXT NOT NULL DEFAULT '',
+                method TEXT NOT NULL DEFAULT '',
+                tags TEXT NOT NULL DEFAULT '',
+                serves INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            -- Dependents: children & pets tracked by the household.
+            CREATE TABLE IF NOT EXISTS dependents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'child',
+                dob TEXT,
+                breed TEXT,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            -- Care items for a dependent (vaccinations, checkups, milestones...).
+            CREATE TABLE IF NOT EXISTS care_items (
+                id TEXT PRIMARY KEY,
+                dependent_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'other',
+                due_date TEXT,
+                done INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -3542,4 +3579,307 @@ def inventory_expiring_within(days: int) -> list[dict]:
                 continue
             if floor <= exp <= horizon:
                 out.append(_inventory_out(d))
+    return out
+
+
+# --- Recipes (recipe box) ---
+
+def _recipe_out(r: dict) -> dict:
+    serves = r.get("serves")
+    return {
+        "id": r["id"],
+        "title": r["title"],
+        "ingredients": r["ingredients"],
+        "method": r["method"],
+        "tags": r["tags"],
+        "serves": int(serves) if serves is not None else None,
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_recipes() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM recipes ORDER BY title").fetchall()
+        return [_recipe_out(row_to_dict(r)) for r in rows]
+
+
+def get_recipe(recipe_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+        return _recipe_out(row_to_dict(row)) if row else None
+
+
+def create_recipe(data: dict) -> dict:
+    rid = _new_id()
+    now = _utcnow()
+    serves = data.get("serves")
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO recipes (id, title, ingredients, method, tags, serves, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                rid,
+                data["title"].strip(),
+                data.get("ingredients") or "",
+                data.get("method") or "",
+                data.get("tags") or "",
+                int(serves) if serves is not None else None,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM recipes WHERE id = ?", (rid,)).fetchone()
+        return _recipe_out(row_to_dict(row))
+
+
+def update_recipe(recipe_id: str, data: dict) -> Optional[dict]:
+    """Partial update. Text fields (ingredients/method/tags) use presence
+    (`key in data`) and coerce None to '' to honour their NOT NULL constraints;
+    `serves` uses presence so it can be cleared to NULL."""
+    fields, values = [], []
+    if data.get("title") is not None:
+        fields.append("title = ?")
+        values.append(data["title"].strip())
+    for key in ("ingredients", "method", "tags"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key] if data[key] is not None else "")
+    if "serves" in data:
+        fields.append("serves = ?")
+        values.append(int(data["serves"]) if data["serves"] is not None else None)
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM recipes WHERE id = ?", (recipe_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(recipe_id)
+            conn.execute(f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM recipes WHERE id = ?", (recipe_id,)).fetchone()
+        return _recipe_out(row_to_dict(row))
+
+
+def delete_recipe(recipe_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        return cur.rowcount > 0
+
+
+# --- Dependents (children & pets) ---
+
+def _dependent_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "kind": r["kind"],
+        "dob": r.get("dob"),
+        "breed": r.get("breed"),
+        "notes": r["notes"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_dependents() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM dependents ORDER BY kind, name").fetchall()
+        return [_dependent_out(row_to_dict(r)) for r in rows]
+
+
+def get_dependent(dependent_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM dependents WHERE id = ?", (dependent_id,)).fetchone()
+        return _dependent_out(row_to_dict(row)) if row else None
+
+
+def create_dependent(data: dict) -> dict:
+    did = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO dependents (id, name, kind, dob, breed, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                did,
+                data["name"].strip(),
+                data.get("kind") or "child",
+                data.get("dob"),
+                data.get("breed"),
+                data.get("notes") or "",
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM dependents WHERE id = ?", (did,)).fetchone()
+        return _dependent_out(row_to_dict(row))
+
+
+def update_dependent(dependent_id: str, data: dict) -> Optional[dict]:
+    """Partial update. The nullable fields (dob/breed) use presence (`key in
+    data`) so they can be cleared to NULL; `notes` coerces None to '' to honour
+    its NOT NULL constraint."""
+    fields, values = [], []
+    if data.get("name") is not None:
+        fields.append("name = ?")
+        values.append(data["name"].strip())
+    if data.get("kind") is not None:
+        fields.append("kind = ?")
+        values.append(data["kind"])
+    for key in ("dob", "breed"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"] if data["notes"] is not None else "")
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM dependents WHERE id = ?", (dependent_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(dependent_id)
+            conn.execute(f"UPDATE dependents SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM dependents WHERE id = ?", (dependent_id,)).fetchone()
+        return _dependent_out(row_to_dict(row))
+
+
+def delete_dependent(dependent_id: str) -> bool:
+    """Delete a dependent and cascade-delete its care_items (done in Python since
+    care_items has no FK ON DELETE CASCADE)."""
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM dependents WHERE id = ?", (dependent_id,)).fetchone():
+            return False
+        conn.execute("DELETE FROM care_items WHERE dependent_id = ?", (dependent_id,))
+        conn.execute("DELETE FROM dependents WHERE id = ?", (dependent_id,))
+        return True
+
+
+# --- Care items (per-dependent health/care schedule) ---
+
+def _care_item_out(r: dict) -> dict:
+    dependent = get_dependent(r["dependent_id"])
+    return {
+        "id": r["id"],
+        "dependent_id": r["dependent_id"],
+        "dependent_name": dependent["name"] if dependent else None,
+        "title": r["title"],
+        "category": r["category"],
+        "due_date": r.get("due_date"),
+        "done": bool(r["done"]),
+        "notes": r["notes"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_care_items(dependent_id: Optional[str] = None) -> list[dict]:
+    """All care items, or just one dependent's. NULL-due items sort last, then by
+    due_date, then title."""
+    with get_conn() as conn:
+        if dependent_id:
+            rows = conn.execute(
+                "SELECT * FROM care_items WHERE dependent_id = ? ORDER BY (due_date IS NULL), due_date, title",
+                (dependent_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM care_items ORDER BY (due_date IS NULL), due_date, title"
+            ).fetchall()
+        return [_care_item_out(row_to_dict(r)) for r in rows]
+
+
+def get_care_item(item_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM care_items WHERE id = ?", (item_id,)).fetchone()
+        return _care_item_out(row_to_dict(row)) if row else None
+
+
+def create_care_item(data: dict) -> dict:
+    cid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO care_items
+                   (id, dependent_id, title, category, due_date, done, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                cid,
+                data["dependent_id"],
+                data["title"].strip(),
+                data.get("category") or "other",
+                data.get("due_date"),
+                1 if data.get("done") else 0,
+                data.get("notes") or "",
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM care_items WHERE id = ?", (cid,)).fetchone()
+        return _care_item_out(row_to_dict(row))
+
+
+def update_care_item(item_id: str, data: dict) -> Optional[dict]:
+    """Partial update. `due_date` uses presence (`key in data`) so it can be
+    cleared to NULL; `notes` coerces None to '' to honour its NOT NULL
+    constraint; `done` is coerced to 0/1."""
+    fields, values = [], []
+    if data.get("dependent_id") is not None:
+        fields.append("dependent_id = ?")
+        values.append(data["dependent_id"])
+    if data.get("title") is not None:
+        fields.append("title = ?")
+        values.append(data["title"].strip())
+    if data.get("category") is not None:
+        fields.append("category = ?")
+        values.append(data["category"])
+    if "due_date" in data:
+        fields.append("due_date = ?")
+        values.append(data["due_date"])
+    if "done" in data and data["done"] is not None:
+        fields.append("done = ?")
+        values.append(1 if data["done"] else 0)
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"] if data["notes"] is not None else "")
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM care_items WHERE id = ?", (item_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(item_id)
+            conn.execute(f"UPDATE care_items SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM care_items WHERE id = ?", (item_id,)).fetchone()
+        return _care_item_out(row_to_dict(row))
+
+
+def delete_care_item(item_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM care_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0
+
+
+def care_due_within(days: int) -> list[dict]:
+    """Not-done care items whose due_date falls within `days` from today. Mirrors
+    documents_expiring_within/inventory_expiring_within: includes ones that
+    lapsed at most 1 day ago (a small grace window) but nothing older, so a
+    reminder can still fire the day something is due."""
+    today = date.today()
+    horizon = today + timedelta(days=days)
+    floor = today - timedelta(days=1)
+    out: list[dict] = []
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM care_items WHERE done = 0 AND due_date IS NOT NULL AND due_date != '' ORDER BY due_date, title"
+        ).fetchall()
+        for r in rows:
+            d = row_to_dict(r)
+            try:
+                due = date.fromisoformat(str(d["due_date"])[:10])
+            except (TypeError, ValueError):
+                continue
+            if floor <= due <= horizon:
+                out.append(_care_item_out(d))
     return out

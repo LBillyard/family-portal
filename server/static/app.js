@@ -3699,6 +3699,14 @@ function initTabs() {
 }
 
 function initActions() {
+  // Show the breed field only for pets in the dependent add/edit forms.
+  document.addEventListener('change', (e) => {
+    const sel = e.target.closest('.dependent-kind-select');
+    if (!sel) return;
+    const breed = sel.closest('.row-edit')?.querySelector('.dependent-breed-field');
+    if (breed) breed.style.display = sel.value === 'pet' ? '' : 'none';
+  });
+
   document.addEventListener('click', (e) => {
     const tabLink = e.target.closest('[data-tab-link]');
     if (tabLink) {
@@ -4603,6 +4611,205 @@ function initActions() {
         .catch((err) => { showToast(err.message, true); btn.disabled = false; });
       return;
     }
+    // --- Recipe book (Home) ---
+    if (action === 'add-recipe') {
+      const host = document.getElementById('recipes-list');
+      if (host && !document.getElementById('recipe-add-form')) {
+        host.insertAdjacentHTML('afterbegin', recipeAddInner());
+        document.querySelector('#recipe-add-form [data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-recipe-new') {
+      const f = readInlineFields(document.getElementById('recipe-add-form'));
+      if (!f.title || !f.title.trim()) { showToast('Recipe needs a title', true); return; }
+      btn.disabled = true;
+      api('/recipes', { method: 'POST', body: JSON.stringify(recipePayload(f)) })
+        .then(() => loadRecipes()).then(() => showToast('Recipe saved'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-recipe') {
+      const row = btn.closest('.maintenance-row');
+      const r = findRecipe(btn.dataset.recipeId);
+      if (row && r) { row.classList.add('editing'); row.innerHTML = recipeEditInner(r); row.querySelector('[data-f="title"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-recipe-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Recipe needs a title', true); return; }
+      api(`/recipes/${btn.dataset.recipeId}`, { method: 'PATCH', body: JSON.stringify(recipePayload(f)) })
+        .then(() => loadRecipes()).then(() => showToast('Recipe updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-recipe-inline') {
+      const row = btn.closest('.maintenance-row');
+      const r = findRecipe(btn.dataset.recipeId);
+      if (row && r) { row.classList.remove('editing'); row.innerHTML = recipeRowInner(r); }
+      return;
+    }
+    if (action === 'delete-recipe') {
+      if (!confirm('Delete this recipe?')) return;
+      api(`/recipes/${btn.dataset.recipeId}`, { method: 'DELETE' })
+        .then(() => loadRecipes()).then(() => showToast('Recipe deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'recipe-plan-toggle') {
+      const row = btn.closest('.maintenance-row');
+      const bar = row?.querySelector('.recipe-plan-bar');
+      if (bar) {
+        bar.hidden = !bar.hidden;
+        if (!bar.hidden) bar.querySelector('.recipe-plan-date')?.focus();
+      }
+      return;
+    }
+    if (action === 'recipe-plan-cancel') {
+      const bar = btn.closest('.recipe-plan-bar');
+      if (bar) bar.hidden = true;
+      return;
+    }
+    if (action === 'recipe-plan-confirm') {
+      const bar = btn.closest('.recipe-plan-bar');
+      const date = bar?.querySelector('.recipe-plan-date')?.value;
+      if (!date) { showToast('Pick a date', true); return; }
+      const r = findRecipe(btn.dataset.recipeId);
+      btn.disabled = true;
+      api(`/recipes/${btn.dataset.recipeId}/plan`, { method: 'POST', body: JSON.stringify({ date }) })
+        .then(() => {
+          showToast(`Planned ${r ? r.title : 'recipe'} for ${fmtShortDate(date, true)}`);
+          if (bar) bar.hidden = true;
+          btn.disabled = false;
+          if (typeof loadMeals === 'function') loadMeals(); // refresh the meal planner card
+        })
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+
+    // --- Little ones: dependents (Home care) ---
+    if (action === 'add-dependent') {
+      const host = document.getElementById('dependents-list');
+      if (host && !document.getElementById('dependent-add-form')) {
+        host.insertAdjacentHTML('afterbegin', dependentAddInner());
+        document.querySelector('#dependent-add-form [data-f="name"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-dependent-new') {
+      const f = readInlineFields(document.getElementById('dependent-add-form'));
+      if (!f.name || !f.name.trim()) { showToast('Give them a name', true); return; }
+      btn.disabled = true;
+      api('/dependents', { method: 'POST', body: JSON.stringify(dependentPayload(f)) })
+        .then(() => loadDependents()).then(() => showToast('Added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-dependent') {
+      const panel = btn.closest('.dependent-panel');
+      const d = findDependent(btn.dataset.dependentId);
+      if (panel && d) { panel.outerHTML = dependentEditInner(d); document.querySelector(`.dependent-panel.editing[data-dependent-id="${d.id}"] [data-f="name"]`)?.focus(); }
+      return;
+    }
+    if (action === 'save-dependent-inline') {
+      const panel = btn.closest('.dependent-panel');
+      const f = readInlineFields(panel);
+      if (!f.name || !f.name.trim()) { showToast('Give them a name', true); return; }
+      api(`/dependents/${btn.dataset.dependentId}`, { method: 'PATCH', body: JSON.stringify(dependentPayload(f)) })
+        .then(() => loadDependents()).then(() => showToast('Updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-dependent-inline') {
+      renderDependents(store.dependents);
+      return;
+    }
+    if (action === 'delete-dependent') {
+      if (!confirm('Delete this dependent? This also removes their care records.')) return;
+      api(`/dependents/${btn.dataset.dependentId}`, { method: 'DELETE' })
+        .then(() => loadDependents()).then(() => showToast('Removed'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+
+    // --- Little ones: care items ---
+    if (action === 'add-care') {
+      const depId = btn.dataset.dependentId;
+      const list = document.getElementById(`care-list-${depId}`);
+      if (list && !list.querySelector('.care-add-form')) {
+        list.insertAdjacentHTML('afterbegin', careAddInner(depId));
+        list.querySelector('.care-add-form [data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'cancel-care-add') {
+      btn.closest('.care-add-form')?.remove();
+      return;
+    }
+    if (action === 'save-care-new') {
+      const form = btn.closest('.care-add-form');
+      const f = readInlineFields(form);
+      if (!f.title || !f.title.trim()) { showToast('Care item needs a title', true); return; }
+      btn.disabled = true;
+      api('/care', {
+        method: 'POST',
+        body: JSON.stringify({
+          dependent_id: btn.dataset.dependentId,
+          title: f.title.trim(),
+          category: f.category || 'other',
+          due_date: f.due_date || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadDependents()).then(() => showToast('Care item added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-care') {
+      const row = btn.closest('.care-row');
+      const it = findCare(btn.dataset.careId);
+      if (row && it) { row.classList.add('editing'); row.innerHTML = careEditInner(it); row.querySelector('[data-f="title"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-care-inline') {
+      const row = btn.closest('.care-row');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Care item needs a title', true); return; }
+      api(`/care/${btn.dataset.careId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: f.title.trim(),
+          category: f.category,
+          due_date: f.due_date || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadDependents()).then(() => showToast('Care item updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-care-inline') {
+      const row = btn.closest('.care-row');
+      const it = findCare(btn.dataset.careId);
+      if (row && it) { row.className = `care-row${it.done ? ' done' : ''}`; row.innerHTML = careRowInner(it); }
+      return;
+    }
+    if (action === 'delete-care') {
+      if (!confirm('Delete this care item?')) return;
+      api(`/care/${btn.dataset.careId}`, { method: 'DELETE' })
+        .then(() => loadDependents()).then(() => showToast('Care item deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'care-done') {
+      const careId = btn.dataset.careId;
+      if (!careId) return;
+      btn.disabled = true;
+      api(`/care/${careId}/done`, { method: 'POST' })
+        .then(() => loadDependents()).then(() => showToast('Marked done ✓'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+
     if (action === 'scan-receipt') {
       document.getElementById('receipt-file-input')?.click();
       return;
@@ -5620,6 +5827,339 @@ function markSectionFailed(key) {
   });
 }
 
+// --- Home: Recipe book ------------------------------------------------------
+// Own endpoint (/api/recipes). Reuses the .maintenance-row + .row-edit inline
+// CRUD pattern. Each row also gets a "Plan…" control that drops the recipe onto
+// a chosen day's meal plan (POST /recipes/{id}/plan) and refreshes the planner.
+
+async function loadRecipes() {
+  const list = document.getElementById('recipes-list');
+  if (!list) return;
+  try {
+    const data = await api('/recipes');
+    store.recipes = data.recipes || [];
+    renderRecipes(store.recipes);
+  } catch {
+    list.innerHTML = '<p class="hint-small">Recipe book unavailable.</p>';
+  }
+}
+
+function findRecipe(id) {
+  return (store.recipes || []).find((r) => String(r.id) === String(id));
+}
+
+// Build a create/update payload from an inline recipe row (shared by add + edit).
+function recipePayload(f) {
+  const serves = parseInt(f.serves, 10);
+  return {
+    title: (f.title || '').trim(),
+    ingredients: (f.ingredients || '').trim(),
+    method: (f.method || '').trim(),
+    tags: (f.tags || '').trim(),
+    serves: Number.isFinite(serves) && serves > 0 ? serves : null,
+  };
+}
+
+function recipeRowInner(r) {
+  const chips = (r.tags || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => `<span class="recipe-chip">${esc(t)}</span>`)
+    .join('');
+  const serves = r.serves ? `<span class="recipe-serves">serves ${esc(String(r.serves))}</span>` : '';
+  const meta = chips || serves ? `<div class="recipe-meta">${chips}${serves}</div>` : '';
+  return `
+        <div class="recipe-main">
+          <div class="recipe-title">${esc(r.title)}</div>
+          ${meta}
+          <div class="recipe-plan-bar" hidden>
+            <input type="date" class="recipe-plan-date" data-f="plan_date" value="${todayIsoDate()}">
+            <button type="button" class="btn btn-sm btn-primary wf-action" data-action="recipe-plan-confirm" data-recipe-id="${r.id}">Plan it</button>
+            <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="recipe-plan-cancel" data-recipe-id="${r.id}">Cancel</button>
+          </div>
+        </div>
+        <div class="recipe-side">
+          <button class="btn btn-sm btn-soft wf-action" data-action="recipe-plan-toggle" data-recipe-id="${r.id}">Plan…</button>
+          <button class="bill-edit-btn wf-action" data-action="edit-recipe" data-recipe-id="${r.id}" title="Edit recipe" aria-label="Edit recipe">✎</button>
+        </div>`;
+}
+
+function recipeEditInner(r) {
+  return `
+    <div class="row-edit" data-recipe-id="${r.id}">
+      <input type="text" class="te-input" data-f="title" value="${esc(r.title)}" placeholder="Recipe name (e.g. Spaghetti bolognese)">
+      <div class="row-edit-fields">
+        <label class="row-edit-full">Ingredients<textarea data-f="ingredients" rows="3" placeholder="One per line or comma-separated">${esc(r.ingredients || '')}</textarea></label>
+        <label class="row-edit-full">Method<textarea data-f="method" rows="3" placeholder="Steps…">${esc(r.method || '')}</textarea></label>
+        <label>Tags<input type="text" data-f="tags" value="${esc(r.tags || '')}" placeholder="e.g. quick, veggie"></label>
+        <label>Serves<input type="number" min="1" data-f="serves" value="${r.serves ?? ''}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-recipe-inline" data-recipe-id="${r.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-recipe-inline" data-recipe-id="${r.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-recipe" data-recipe-id="${r.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function recipeAddInner() {
+  return `
+    <div class="row-edit" id="recipe-add-form">
+      <input type="text" class="te-input" data-f="title" placeholder="Recipe name (e.g. Spaghetti bolognese)">
+      <div class="row-edit-fields">
+        <label class="row-edit-full">Ingredients<textarea data-f="ingredients" rows="3" placeholder="One per line or comma-separated"></textarea></label>
+        <label class="row-edit-full">Method<textarea data-f="method" rows="3" placeholder="Steps…"></textarea></label>
+        <label>Tags<input type="text" data-f="tags" placeholder="e.g. quick, veggie"></label>
+        <label>Serves<input type="number" min="1" data-f="serves" placeholder="4"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-recipe-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="recipes-list">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderRecipes(recipes) {
+  const el = document.getElementById('recipes-list');
+  if (!el) return;
+  el.innerHTML = (recipes && recipes.length)
+    ? recipes.map((r) => `<div class="maintenance-row" data-recipe-id="${r.id}">${recipeRowInner(r)}</div>`).join('')
+    : '<div class="vault-empty"><p>No recipes yet</p><p class="hint-small">Save your go-to meals here, then drop them straight into the week\'s plan.</p></div>';
+}
+
+// --- Home care: Little ones (dependents + their care items) ------------------
+// Own endpoints (/api/dependents, /api/care?dependent_id=). Renders each
+// dependent as a panel, then their care items (jabs/checkups/etc.). Reuses the
+// .row-edit inline-CRUD pattern; all status colours use semantic vars.
+
+const CARE_CATEGORIES = [
+  ['vaccination', '💉 Vaccination'],
+  ['checkup', '🩺 Checkup'],
+  ['grooming', '✂️ Grooming'],
+  ['milestone', '🌟 Milestone'],
+  ['measurement', '📏 Measurement'],
+  ['other', '📋 Other'],
+];
+const CARE_EMOJI = { vaccination: '💉', checkup: '🩺', grooming: '✂️', milestone: '🌟', measurement: '📏', other: '📋' };
+const DEPENDENT_KINDS = [['child', '👶 Child'], ['pet', '🐶 Pet']];
+
+async function loadDependents() {
+  const host = document.getElementById('dependents-list');
+  if (!host) return;
+  try {
+    const data = await api('/dependents');
+    store.dependents = data.dependents || [];
+    // Care items live on a separate endpoint, one call per dependent (parallel).
+    const cares = await Promise.all(
+      store.dependents.map((d) =>
+        api(`/care?dependent_id=${encodeURIComponent(d.id)}`).then((r) => r.items || []).catch(() => [])
+      )
+    );
+    store.careItems = {};
+    store.dependents.forEach((d, i) => { store.careItems[d.id] = cares[i]; });
+    renderDependents(store.dependents);
+  } catch {
+    host.innerHTML = '<p class="hint-small">Little ones unavailable.</p>';
+  }
+}
+
+function findDependent(id) {
+  return (store.dependents || []).find((d) => String(d.id) === String(id));
+}
+
+function findCare(id) {
+  const all = store.careItems || {};
+  for (const depId in all) {
+    const found = (all[depId] || []).find((c) => String(c.id) === String(id));
+    if (found) return found;
+  }
+  return null;
+}
+
+// Age from dob: "N months" under 2 years, otherwise whole years.
+function dependentAge(dob) {
+  if (!dob) return '';
+  const [y, m, day] = dob.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !day) return '';
+  const birth = new Date(y, m - 1, day);
+  const now = new Date();
+  let months = (now.getFullYear() - birth.getFullYear()) * 12 + (now.getMonth() - birth.getMonth());
+  if (now.getDate() < birth.getDate()) months -= 1;
+  if (months < 0) return '';
+  const years = Math.floor(months / 12);
+  if (years < 2) return `${months} month${months === 1 ? '' : 's'}`;
+  return `${years} year${years === 1 ? '' : 's'}`;
+}
+
+// Care due status: overdue (red) / due within 30d (amber) / future (muted).
+function careDueMeta(dueDate, done) {
+  if (done) return { cls: 'done', label: dueDate ? fmtShortDate(dueDate, true) : '' };
+  if (!dueDate) return { cls: 'none', label: 'No date' };
+  const iso = String(dueDate).slice(0, 10);
+  const label = fmtShortDate(dueDate, true);
+  if (iso < todayIsoDate()) return { cls: 'overdue', label: `Overdue · ${label}` };
+  const [y, m, d] = iso.split('-').map(Number);
+  const due = new Date(y, m - 1, d);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  const days = Math.round((due - now) / 86400000);
+  if (days <= 30) return { cls: 'soon', label: `Due ${label}` };
+  return { cls: 'future', label: `Due ${label}` };
+}
+
+function careRowInner(it) {
+  const emoji = CARE_EMOJI[it.category] || '📋';
+  const due = careDueMeta(it.due_date, it.done);
+  return `
+        <div class="care-main">
+          <span class="care-emoji" title="${esc(it.category)}">${emoji}</span>
+          <div class="care-body">
+            <div class="care-title">${esc(it.title)}</div>
+            <div class="care-sub">
+              ${due.label ? `<span class="care-due ${due.cls}">${due.label}</span>` : ''}
+              ${it.notes ? `<span class="care-notes">${esc(it.notes)}</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="care-actions">
+          ${it.done
+            ? '<span class="care-done-badge">Done ✓</span>'
+            : `<button class="btn btn-sm btn-primary wf-action" data-action="care-done" data-care-id="${it.id}">Done ✓</button>`}
+          <button class="bill-edit-btn wf-action" data-action="edit-care" data-care-id="${it.id}" title="Edit care item" aria-label="Edit care item">✎</button>
+        </div>`;
+}
+
+function careEditInner(it) {
+  const catOpts = CARE_CATEGORIES.map(([v, l]) => `<option value="${v}"${v === it.category ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" data-care-id="${it.id}">
+      <input type="text" class="te-input" data-f="title" value="${esc(it.title)}" placeholder="e.g. Rabies booster">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${catOpts}</select></label>
+        <label>Due date<input type="date" data-f="due_date" value="${esc((it.due_date || '').slice(0, 10))}"></label>
+        <label>Notes<input type="text" data-f="notes" value="${esc(it.notes || '')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-care-inline" data-care-id="${it.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-care-inline" data-care-id="${it.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-care" data-care-id="${it.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function careAddInner(dependentId) {
+  const catOpts = CARE_CATEGORIES.map(([v, l]) => `<option value="${v}"${v === 'checkup' ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit care-add-form" data-dependent-id="${dependentId}">
+      <input type="text" class="te-input" data-f="title" placeholder="e.g. 12-week vaccination">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${catOpts}</select></label>
+        <label>Due date<input type="date" data-f="due_date" value="${todayIsoDate()}"></label>
+        <label>Notes<input type="text" data-f="notes" placeholder="Optional"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-care-new" data-dependent-id="${dependentId}">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-care-add">Cancel</button>
+      </div>
+    </div>`;
+}
+
+// Build a create/update payload from an inline dependent row (shared by add + edit).
+function dependentPayload(f) {
+  const kind = f.kind === 'pet' ? 'pet' : 'child';
+  return {
+    name: (f.name || '').trim(),
+    kind,
+    dob: f.dob || null,
+    breed: kind === 'pet' ? ((f.breed || '').trim() || null) : null,
+    notes: (f.notes || '').trim() || null,
+  };
+}
+
+function dependentKindSelect(selected) {
+  return DEPENDENT_KINDS.map(([v, l]) => `<option value="${v}"${v === selected ? ' selected' : ''}>${l}</option>`).join('');
+}
+
+function dependentPanel(d) {
+  const emoji = d.kind === 'pet' ? '🐶' : '👶';
+  const parts = [];
+  const age = dependentAge(d.dob);
+  if (age) parts.push(esc(age));
+  if (d.kind === 'pet' && d.breed) parts.push(esc(d.breed));
+  const meta = parts.join(' · ');
+  const items = store.careItems?.[d.id] || [];
+  const careRows = items.length
+    ? items.map((it) => `<div class="care-row${it.done ? ' done' : ''}" data-care-id="${it.id}">${careRowInner(it)}</div>`).join('')
+    : '<p class="hint-small care-empty">No care items yet — add jabs, checkups or milestones below.</p>';
+  return `
+    <div class="dependent-panel" data-dependent-id="${d.id}">
+      <div class="dependent-head">
+        <div class="dependent-ident">
+          <span class="dependent-emoji">${emoji}</span>
+          <div>
+            <div class="dependent-name">${esc(d.name)}</div>
+            ${meta ? `<div class="dependent-meta">${meta}</div>` : ''}
+          </div>
+        </div>
+        <div class="dependent-head-actions">
+          <button class="btn btn-sm btn-soft wf-action" data-action="add-care" data-dependent-id="${d.id}">+ Care item</button>
+          <button class="bill-edit-btn wf-action" data-action="edit-dependent" data-dependent-id="${d.id}" title="Edit" aria-label="Edit dependent">✎</button>
+        </div>
+      </div>
+      ${d.notes ? `<p class="hint-small dependent-notes">${esc(d.notes)}</p>` : ''}
+      <div class="care-list" id="care-list-${d.id}">${careRows}</div>
+    </div>`;
+}
+
+function dependentEditInner(d) {
+  const petHidden = d.kind === 'pet' ? '' : ' style="display:none"';
+  return `
+    <div class="dependent-panel editing" data-dependent-id="${d.id}">
+      <div class="row-edit" data-dependent-id="${d.id}">
+        <input type="text" class="te-input" data-f="name" value="${esc(d.name)}" placeholder="Name">
+        <div class="row-edit-fields">
+          <label>Type<select data-f="kind" class="dependent-kind-select">${dependentKindSelect(d.kind)}</select></label>
+          <label>Date of birth<input type="date" data-f="dob" value="${esc((d.dob || '').slice(0, 10))}"></label>
+          <label class="dependent-breed-field"${petHidden}>Breed<input type="text" data-f="breed" value="${esc(d.breed || '')}" placeholder="e.g. Cockapoo"></label>
+          <label>Notes<input type="text" data-f="notes" value="${esc(d.notes || '')}"></label>
+        </div>
+        <div class="row-edit-actions">
+          <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-dependent-inline" data-dependent-id="${d.id}">Save</button>
+          <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-dependent-inline" data-dependent-id="${d.id}">Cancel</button>
+          <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-dependent" data-dependent-id="${d.id}" style="margin-left:auto">Delete</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function dependentAddInner() {
+  return `
+    <div class="dependent-panel" id="dependent-add-form">
+      <div class="row-edit">
+        <input type="text" class="te-input" data-f="name" placeholder="Name (e.g. Arthur)">
+        <div class="row-edit-fields">
+          <label>Type<select data-f="kind" class="dependent-kind-select">${dependentKindSelect('child')}</select></label>
+          <label>Date of birth<input type="date" data-f="dob"></label>
+          <label class="dependent-breed-field" style="display:none">Breed<input type="text" data-f="breed" placeholder="e.g. Cockapoo"></label>
+          <label>Notes<input type="text" data-f="notes" placeholder="Optional"></label>
+        </div>
+        <div class="row-edit-actions">
+          <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-dependent-new">Add</button>
+          <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="dependents-list">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderDependents(deps) {
+  const host = document.getElementById('dependents-list');
+  if (!host) return;
+  host.innerHTML = (deps && deps.length)
+    ? deps.map((d) => dependentPanel(d)).join('')
+    : '<div class="vault-empty"><p>No little ones yet</p><p class="hint-small">Add Arthur and Bean here to track jabs, checkups, grooming and milestones.</p></div>';
+}
+
 async function load() {
   try {
     const me = await api('/auth/me');
@@ -5654,6 +6194,7 @@ async function load() {
   }
   loadShopping();  // shared shopping list on the home card (own endpoint)
   loadMeals();     // weekly meal planner on the home card (own endpoint)
+  loadRecipes();   // Home → Recipe book card: save meals & plan them (own endpoint)
   loadOccasions(); // Home → Occasions card: birthdays & anniversaries (own endpoint)
   if (briefing) renderBriefing(briefing);
   if (activity) renderActivityFeed(activity);
@@ -5667,6 +6208,7 @@ async function load() {
   renderTradespeople(tradespeople || { tradespeople: [] });
   loadChores();     // Home care → Chores rotation card (own endpoint)
   loadInventory();  // Home care → Home inventory / warranty card (own endpoint)
+  loadDependents(); // Home care → Little ones card: dependents + care items (own endpoints)
   if (appointments) renderAppointments(appointments);
   if (holidays) renderHolidays(holidays);
   if (media) renderMedia(media);

@@ -36,10 +36,14 @@ from shared.schemas import (
     BillUpdate,
     BudgetCreate,
     BudgetUpdate,
+    CareItemCreate,
+    CareItemUpdate,
     ChangePasswordRequest,
     ChecklistToggleRequest,
     ChoreCreate,
     ChoreUpdate,
+    DependentCreate,
+    DependentUpdate,
     TransactionCategoryUpdate,
     DocumentCreate,
     EmailReceiptImport,
@@ -62,6 +66,8 @@ from shared.schemas import (
     OccasionUpdate,
     InboxImport,
     PushSubscribe,
+    RecipeCreate,
+    RecipeUpdate,
     SavingsGoalCreate,
     SavingsGoalUpdate,
     SearchQuery,
@@ -1830,4 +1836,116 @@ def update_inventory_route(item_id: str, body: InventoryUpdate, _: dict = Depend
 def delete_inventory_route(item_id: str, _: dict = Depends(require_user)):
     if not db.delete_inventory_item(item_id):
         raise HTTPException(status_code=404, detail="Inventory item not found")
+    return {"ok": True}
+
+
+# --- Recipes (household recipe book, plans into the meal planner) ---
+
+@router.get("/recipes")
+def api_recipes(_: dict = Depends(require_user)):
+    return {"recipes": db.list_recipes()}
+
+
+@router.post("/recipes")
+def create_recipe_route(body: RecipeCreate, _: dict = Depends(require_user)):
+    if not (body.title or "").strip():
+        raise HTTPException(status_code=400, detail="Recipe title is required")
+    return {"recipe": db.create_recipe(body.model_dump())}
+
+
+@router.patch("/recipes/{recipe_id}")
+def update_recipe_route(recipe_id: str, body: RecipeUpdate, _: dict = Depends(require_user)):
+    recipe = db.update_recipe(recipe_id, body.model_dump(exclude_unset=True))
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return {"recipe": recipe}
+
+
+@router.delete("/recipes/{recipe_id}")
+def delete_recipe_route(recipe_id: str, _: dict = Depends(require_user)):
+    if not db.delete_recipe(recipe_id):
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    return {"ok": True}
+
+
+@router.post("/recipes/{recipe_id}/plan")
+def plan_recipe_route(
+    recipe_id: str, date: str = Body(..., embed=True), _: dict = Depends(require_user)
+):
+    """Drop a recipe onto the meal planner for a given day (reuses upsert_meal_plan)."""
+    recipe = db.get_recipe(recipe_id)
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
+    day = (date or "").strip()
+    if len(day) != 10 or day.count("-") != 2:
+        raise HTTPException(status_code=400, detail="Date must be in YYYY-MM-DD format")
+    meal = db.upsert_meal_plan(day, recipe["title"], recipe.get("ingredients") or "")
+    return {"meal": meal}
+
+
+# --- Dependents (children & pets) with their care items ---
+
+@router.get("/dependents")
+def api_dependents(_: dict = Depends(require_user)):
+    return {"dependents": db.list_dependents()}
+
+
+@router.post("/dependents")
+def create_dependent_route(body: DependentCreate, _: dict = Depends(require_user)):
+    if not (body.name or "").strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    return {"dependent": db.create_dependent(body.model_dump())}
+
+
+@router.patch("/dependents/{dependent_id}")
+def update_dependent_route(dependent_id: str, body: DependentUpdate, _: dict = Depends(require_user)):
+    dependent = db.update_dependent(dependent_id, body.model_dump(exclude_unset=True))
+    if dependent is None:
+        raise HTTPException(status_code=404, detail="Dependent not found")
+    return {"dependent": dependent}
+
+
+@router.delete("/dependents/{dependent_id}")
+def delete_dependent_route(dependent_id: str, _: dict = Depends(require_user)):
+    if not db.delete_dependent(dependent_id):
+        raise HTTPException(status_code=404, detail="Dependent not found")
+    return {"ok": True}
+
+
+# --- Care items (vaccinations, check-ups, grooming, etc.) ---
+
+@router.get("/care")
+def api_care(dependent_id: str = "", _: dict = Depends(require_user)):
+    return {"items": db.list_care_items(dependent_id or None)}
+
+
+@router.post("/care")
+def create_care_route(body: CareItemCreate, _: dict = Depends(require_user)):
+    if not (body.title or "").strip():
+        raise HTTPException(status_code=400, detail="Care item title is required")
+    if not (body.dependent_id or "").strip() or not db.get_dependent(body.dependent_id):
+        raise HTTPException(status_code=400, detail="Unknown dependent")
+    return {"item": db.create_care_item(body.model_dump())}
+
+
+@router.patch("/care/{item_id}")
+def update_care_route(item_id: str, body: CareItemUpdate, _: dict = Depends(require_user)):
+    item = db.update_care_item(item_id, body.model_dump(exclude_unset=True))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Care item not found")
+    return {"item": item}
+
+
+@router.post("/care/{item_id}/done")
+def care_done_route(item_id: str, _: dict = Depends(require_user)):
+    item = db.update_care_item(item_id, {"done": True})
+    if item is None:
+        raise HTTPException(status_code=404, detail="Care item not found")
+    return {"item": item}
+
+
+@router.delete("/care/{item_id}")
+def delete_care_route(item_id: str, _: dict = Depends(require_user)):
+    if not db.delete_care_item(item_id):
+        raise HTTPException(status_code=404, detail="Care item not found")
     return {"ok": True}
