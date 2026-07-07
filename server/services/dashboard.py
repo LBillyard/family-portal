@@ -16,6 +16,15 @@ def _parse_dt(s: str) -> datetime | None:
         return None
 
 
+def _suggestions_count() -> int:
+    """Pending email-suggestion count — best-effort so a DB hiccup can never 500
+    the whole Home dashboard (mirrors the try-guard the briefing uses)."""
+    try:
+        return db.count_pending_suggestions()
+    except Exception:
+        return 0
+
+
 def _trip_ended(trip: dict) -> bool:
     """A trip is over when its end (or start, if end is unset) is in the past."""
     ref = trip.get("end") or trip.get("start")
@@ -70,6 +79,7 @@ def build_dashboard() -> dict:
         "reminders": reminders,
         "documents": doc_alerts[:3],
         "notifications_unread": len([r for r in reminders]),
+        "suggestions_count": _suggestions_count(),
         "finance_summary": db.finance_summary(),
         "sync": {"google_last": db.get_setting("google_last_sync", "never"), "status": "ok"},
     }

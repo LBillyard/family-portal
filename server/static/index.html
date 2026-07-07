@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=52">
+  <link rel="stylesheet" href="/static/style.css?v=53">
   <script>
     // No-flash theme guard: set the theme attribute before first paint.
     // 'system' (or unset) leaves the attribute off so prefers-color-scheme wins.
@@ -156,6 +156,14 @@
               <button class="card-link-btn wf-action" data-action="add-event" data-modal="add-event">+ Add</button>
             </div>
             <div id="home-events"></div>
+          </div>
+
+          <div class="card" data-card="suggestions">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Suggestions from your email</h3><p>Spotted in your inbox — add with one tap</p></div>
+              <button id="suggestions-scan-btn" class="card-link-btn wf-action" data-action="scan-suggestions">Scan my email</button>
+            </div>
+            <div id="home-suggestions"></div>
           </div>
 
           <div class="card" data-card="tasks">
@@ -776,6 +784,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=52"></script>
+  <script src="/static/app.js?v=53"></script>
 </body>
 </html>

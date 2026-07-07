@@ -246,5 +246,14 @@ def whatsapp_digest_line(
     if money_bits:
         sections.append("💷 " + " · ".join(money_bits))
 
+    # Proactive email suggestions waiting for review — a single compact segment,
+    # NO newlines (Meta rejects them). Guarded so it never breaks the digest.
+    try:
+        n_sug = db.count_pending_suggestions()
+        if n_sug:
+            sections.append(f"🔔 {n_sug} email suggestion{'s' if n_sug != 1 else ''}")
+    except Exception:
+        pass
+
     body = f"{date_str} — " + " · ".join(sections)
     return re.sub(r"\s+", " ", body).strip()[:1000]

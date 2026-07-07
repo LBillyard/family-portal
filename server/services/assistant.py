@@ -653,6 +653,18 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_email_suggestions",
+            "description": ("List the pending 'spotted in your email' suggestions the Hub has surfaced from "
+                            "the inbox scan (trips, appointments, documents, bills) but that no one has added "
+                            "or dismissed yet. Use when they ask 'what did you spot in my email?', 'any "
+                            "suggestions?', or 'what's waiting for me to review?'. Read-only — adding one is a "
+                            "button in the app, not something you do here."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
@@ -1204,6 +1216,13 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 "items": added,
                 "scanned": res.get("scanned", 0),
                 "needs_reconnect": res.get("needs_reconnect", []),
+            }
+        if name == "list_email_suggestions":
+            return {
+                "suggestions": [
+                    {"kind": s.get("kind"), "title": s.get("title"), "summary": s.get("summary")}
+                    for s in db.list_suggestions(status="pending")
+                ]
             }
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:

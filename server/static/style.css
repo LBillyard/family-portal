@@ -5509,3 +5509,53 @@ dialog select:focus {
 .home-card-hide {
   margin-left: auto;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Proactive inbox suggestions (Home card)                                    */
+/* -------------------------------------------------------------------------- */
+
+.sug-emoji {
+  font-size: 1.25rem;
+  line-height: 1;
+  min-width: 24px;
+  text-align: center;
+  margin-top: 2px;
+}
+
+.sug-source {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sug-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sug-scanning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.sug-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-light);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: sug-spin 0.7s linear infinite;
+  display: inline-block;
+}
+
+@keyframes sug-spin {
+  to { transform: rotate(360deg); }
+}

@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from server import auth, database as db
 from server.services import csv_import, dashboard as dash, documents as doc_files, google_calendar, openrouter, open_banking
 from server.services import assistant as ai_assistant, media as media_files, subscriptions as sub_svc
-from server.services import memory as mem_svc, gmail_memory, gmail_inbox
+from server.services import memory as mem_svc, gmail_memory, gmail_inbox, inbox_actions
 from server.services import activity as activity_svc, briefing as briefing_svc, renewals as renewals_svc
 from server.services import finance_merge, notifications as notify_svc, receipts as receipt_svc
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
@@ -79,6 +79,7 @@ from shared.schemas import (
     SearchQuery,
     ShoppingItemCreate,
     SubscriptionUpdate,
+    SuggestionActionRequest,
     TaskCreate,
     TaskUpdate,
     TradespersonCreate,
@@ -905,6 +906,34 @@ async def inbox_import(body: InboxImport, user: dict = Depends(require_user)):
     if result.get("created"):
         activity_svc.log(user, "created", "inbox", f"Filed {result['created']} item(s) from email")
     return result
+
+
+# --- Proactive inbox suggestions (persistent, deduplicated across scans) ---
+
+@router.post("/inbox/suggestions/scan")
+async def inbox_suggestions_scan(user: dict = Depends(require_user)):
+    """Re-scan the inbox and persist any NEW findings as pending suggestions."""
+    return await inbox_actions.scan_and_store(user["id"])
+
+
+@router.get("/inbox/suggestions")
+def inbox_suggestions_list(_: dict = Depends(require_user)):
+    """Pending suggestions across the whole household (the portal is shared)."""
+    return {"suggestions": db.list_suggestions(status="pending")}
+
+
+@router.patch("/inbox/suggestions/{sid}")
+def inbox_suggestion_action(sid: str, body: SuggestionActionRequest, user: dict = Depends(require_user)):
+    if body.action == "accept":
+        r = inbox_actions.apply_suggestion(sid)
+        if not r.get("ok"):
+            raise HTTPException(status_code=404, detail=r.get("error", "Suggestion not found"))
+        activity_svc.log(user, "created", "inbox", f"Added {r['kind']} from an email suggestion")
+        return {"ok": True, "status": "accepted", "kind": r["kind"]}
+    row = db.set_suggestion_status(sid, "dismissed")
+    if not row:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    return {"ok": True, "status": "dismissed"}
 
 
 @router.post("/transactions")

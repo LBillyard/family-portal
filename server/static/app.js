@@ -1498,6 +1498,135 @@ function renderHome(data) {
   applyHomeLayout();
 }
 
+// --- Proactive inbox suggestions (Home card) -------------------------------
+// Persistent, deduplicated "we spotted this in your email — add it?" cards that
+// survive across scans (dismissed stays dismissed, accepted stays accepted).
+// GET /api/inbox/suggestions -> { suggestions:[{id,kind,title,summary,source_subject,...}] }.
+// Own endpoint / own refresh, like the shopping + meal home cards.
+const SUGGESTION_KIND_EMOJI = {
+  trip: '✈️',
+  appointment: '📅',
+  document: '📄',
+  bill: '💷',
+};
+
+// Where each accepted kind lands — drives the "Added to your …" toast.
+const SUGGESTION_ADDED_DEST = {
+  trip: 'trips',
+  appointment: 'calendar',
+  document: 'vault',
+  bill: 'bills',
+};
+
+async function renderInboxSuggestions() {
+  const el = document.getElementById('home-suggestions');
+  if (!el) return;
+  let res;
+  try {
+    res = await api('/inbox/suggestions');
+  } catch {
+    el.innerHTML = '<p class="hint-small">Suggestions unavailable.</p>';
+    return;
+  }
+  const items = (res && res.suggestions) || [];
+  if (!items.length) {
+    el.innerHTML = '<p class="hint-small">Nothing waiting — I\'ll keep an eye on your inbox.</p>';
+    return;
+  }
+  el.innerHTML = items
+    .map((s) => {
+      const emoji = SUGGESTION_KIND_EMOJI[s.kind] || '📨';
+      const summary = s.summary ? `<div class="list-item-meta">${esc(s.summary)}</div>` : '';
+      const src = s.source_subject ? `<div class="sug-source">from: ${esc(s.source_subject)}</div>` : '';
+      return `
+      <div class="list-item sug-row" data-sug-id="${esc(s.id)}">
+        <div class="sug-emoji" aria-hidden="true">${emoji}</div>
+        <div class="list-item-body">
+          <div class="list-item-title">${esc(s.title)}</div>
+          ${summary}
+          ${src}
+          <div class="sug-actions">
+            <button type="button" class="btn btn-sm btn-primary wf-action" data-action="accept-suggestion" data-sug-id="${esc(s.id)}" data-kind="${esc(s.kind)}">Add ✓</button>
+            <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="dismiss-suggestion" data-sug-id="${esc(s.id)}">Dismiss ✕</button>
+          </div>
+        </div>
+      </div>`;
+    })
+    .join('');
+}
+
+// Drop a row after accept/dismiss for instant feedback; fall back to the empty
+// state if it was the last one. A full load() then refreshes home counts.
+function removeSuggestionRow(sid) {
+  const el = document.getElementById('home-suggestions');
+  if (!el) return;
+  el.querySelectorAll('.sug-row').forEach((row) => {
+    if (row.dataset.sugId === sid) row.remove();
+  });
+  if (!el.querySelector('.sug-row')) {
+    el.innerHTML = '<p class="hint-small">Nothing waiting — I\'ll keep an eye on your inbox.</p>';
+  }
+}
+
+async function acceptSuggestion(sid, kind, btn) {
+  if (!sid) return;
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/inbox/suggestions/${encodeURIComponent(sid)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'accept' }),
+    });
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    return showToast(err.message, true);
+  }
+  removeSuggestionRow(sid);
+  showToast(`Added to your ${SUGGESTION_ADDED_DEST[kind] || 'hub'}`);
+  load(); // accepting created a trip/appointment/document/bill — refresh home counts
+}
+
+async function dismissSuggestion(sid, btn) {
+  if (!sid) return;
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/inbox/suggestions/${encodeURIComponent(sid)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action: 'dismiss' }),
+    });
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    return showToast(err.message, true);
+  }
+  removeSuggestionRow(sid);
+  showToast('Dismissed');
+}
+
+// Header "Scan my email" button: fresh POST scan, spinner, then re-render.
+async function scanInboxSuggestions(btn) {
+  const el = document.getElementById('home-suggestions');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+  if (el) el.innerHTML = '<div class="sug-scanning"><span class="sug-spinner" aria-hidden="true"></span> Reading your inbox…</div>';
+  let res;
+  try {
+    res = await api('/inbox/suggestions/scan', { method: 'POST' });
+  } catch (err) {
+    showToast(err.message, true);
+    await renderInboxSuggestions();
+    if (btn) { btn.disabled = false; btn.textContent = 'Scan my email'; }
+    return;
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Scan my email'; }
+  if (res && res.no_account) {
+    showToast('Connect your Gmail in Settings', true);
+  } else if (res && (res.needs_reconnect || []).length) {
+    showToast('Reconnect Gmail to grant email access', true);
+  } else {
+    const n = res && typeof res.new === 'number' ? res.new : 0;
+    showToast(n > 0 ? `Found ${n} new suggestion${n === 1 ? '' : 's'}` : 'No new suggestions right now');
+  }
+  await renderInboxSuggestions();
+}
+
 // --- Shared shopping list (home card) ---
 // Refreshes on its own (not via the heavy load()) so ticking an item doesn't reset the page.
 async function loadShopping() {
@@ -4279,6 +4408,7 @@ const NOTIF_PREF_ROWS = [
   ['document_expiry_reminders', 'Document expiry', 'When a vault document is about to expire'],
   ['weekly_finance_summary', 'Weekly finance recap', 'A money round-up each Sunday evening'],
   ['budget_alerts', 'Budget alerts', 'A heads-up when a spending category nears or exceeds its monthly budget'],
+  ['proactive_inbox', 'Email suggestions', 'Let the Hub scan your inbox for bookings, renewals & bills and nudge you'],
 ];
 
 // Fetch notification preferences and render the settings card. Hides the card
@@ -6004,6 +6134,11 @@ function initActions() {
     if (action === 'delete-shopping') { deleteShoppingItem(btn.dataset.shopId); return; }
     if (action === 'clear-done-shopping') { clearDoneShopping(); return; }
 
+    // --- Proactive inbox suggestions (home) ---
+    if (action === 'scan-suggestions') { scanInboxSuggestions(btn); return; }
+    if (action === 'accept-suggestion') { acceptSuggestion(btn.dataset.sugId, btn.dataset.kind, btn); return; }
+    if (action === 'dismiss-suggestion') { dismissSuggestion(btn.dataset.sugId, btn); return; }
+
     // --- Weekly meal planner (home) — inline edit, own refresh ---
     if (action === 'edit-meal') {
       const row = btn.closest('.meal-row');
@@ -7445,6 +7580,7 @@ async function load() {
   }
   loadShopping();  // shared shopping list on the home card (own endpoint)
   loadMeals();     // weekly meal planner on the home card (own endpoint)
+  renderInboxSuggestions(); // Home → email suggestions card (own endpoint)
   loadRecipes();   // Home → Recipe book card: save meals & plan them (own endpoint)
   loadOccasions(); // Home → Occasions card: birthdays & anniversaries (own endpoint)
   loadWishlist();  // Home → Gift ideas / wishlists card (own endpoint)

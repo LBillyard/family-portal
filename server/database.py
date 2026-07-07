@@ -298,6 +298,7 @@ def init_db() -> None:
                 large_transaction_threshold INTEGER NOT NULL DEFAULT 200,
                 weekly_finance_summary INTEGER NOT NULL DEFAULT 1,
                 budget_alerts INTEGER NOT NULL DEFAULT 1,
+                proactive_inbox INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT
             );
 
@@ -489,6 +490,24 @@ def init_db() -> None:
                 notes TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            -- Proactive, deduplicated "we spotted this in your email" suggestions
+            -- that survive across scans (dismissed stays dismissed, accepted stays
+            -- accepted). One row per (user_id, dedupe_key).
+            CREATE TABLE IF NOT EXISTS suggestions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT,
+                payload TEXT,
+                source_subject TEXT,
+                source_message_id TEXT,
+                dedupe_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT,
+                updated_at TEXT
             );
         """)
         _migrate(conn)
@@ -719,6 +738,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN weekly_finance_summary INTEGER NOT NULL DEFAULT 1")
     if "budget_alerts" not in pcols:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN budget_alerts INTEGER NOT NULL DEFAULT 1")
+    if "proactive_inbox" not in pcols:
+        conn.execute("ALTER TABLE notification_prefs ADD COLUMN proactive_inbox INTEGER NOT NULL DEFAULT 1")
+
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS suggestions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT,
+            payload TEXT,
+            source_subject TEXT,
+            source_message_id TEXT,
+            dedupe_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT,
+            updated_at TEXT
+        )"""
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestions_user_dedupe ON suggestions(user_id, dedupe_key)"
+    )
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -2932,6 +2973,7 @@ _PREFS_BOOL_FIELDS = (
     "large_transaction_alerts",
     "weekly_finance_summary",
     "budget_alerts",
+    "proactive_inbox",
 )
 
 
@@ -4308,4 +4350,130 @@ def update_itinerary_item(item_id: str, data: dict) -> Optional[dict]:
 def delete_itinerary_item(item_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM itinerary_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0
+
+
+# --- Email suggestions (proactive inbox → actions) ---
+
+def _suggestion_out(r: dict) -> dict:
+    raw = r.get("payload")
+    try:
+        payload = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        payload = {}
+    return {
+        "id": r["id"],
+        "user_id": r.get("user_id"),
+        "kind": r["kind"],
+        "title": r["title"],
+        "summary": r.get("summary"),
+        "payload": payload,
+        "source_subject": r.get("source_subject"),
+        "source_message_id": r.get("source_message_id"),
+        "dedupe_key": r["dedupe_key"],
+        "status": r["status"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def create_suggestion(data: dict) -> Optional[dict]:
+    """Idempotent upsert keyed on (user_id, dedupe_key). If a row with that pair
+    already exists in ANY status it is left completely untouched and None is
+    returned, so a re-scan never resurrects a dismissed/accepted item. On a fresh
+    insert the new row (status 'pending', with payload parsed back to a dict) is
+    returned. `payload` accepts a dict (json.dumps'd) or an already-serialised str."""
+    sid = _new_id()
+    now = _utcnow()
+    payload = data.get("payload")
+    if payload is None or isinstance(payload, str):
+        payload_json = payload
+    else:
+        payload_json = json.dumps(payload)
+    with get_conn() as conn:
+        # Dedupe HOUSEHOLD-WIDE on dedupe_key alone (not per-user): the same
+        # booking/confirmation often lands in both partners' inboxes, so keying on
+        # dedupe_key means a shared item is surfaced once regardless of who scanned
+        # it — and a dismissed/accepted item is never resurrected by anyone's
+        # re-scan. (The UNIQUE(user_id, dedupe_key) index remains a backstop.)
+        if conn.execute(
+            "SELECT 1 FROM suggestions WHERE dedupe_key = ? LIMIT 1", (data["dedupe_key"],)
+        ).fetchone():
+            return None
+        conn.execute(
+            """INSERT INTO suggestions
+               (id, user_id, kind, title, summary, payload, source_subject,
+                source_message_id, dedupe_key, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+            (
+                sid,
+                data.get("user_id"),
+                data["kind"],
+                data["title"],
+                data.get("summary"),
+                payload_json,
+                data.get("source_subject"),
+                data.get("source_message_id"),
+                data["dedupe_key"],
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM suggestions WHERE id = ?", (sid,)).fetchone()
+        return _suggestion_out(row_to_dict(row))
+
+
+def list_suggestions(status: str | None = "pending", user_id: str | None = None) -> list[dict]:
+    """Newest first. status=None returns every status; user_id=None spans the
+    whole household (the portal is shared)."""
+    clauses, params = [], []
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status)
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM suggestions {where} ORDER BY created_at DESC, id DESC", params
+        ).fetchall()
+        return [_suggestion_out(row_to_dict(r)) for r in rows]
+
+
+def get_suggestion(sid: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM suggestions WHERE id = ?", (sid,)).fetchone()
+        return _suggestion_out(row_to_dict(row)) if row else None
+
+
+def set_suggestion_status(sid: str, status: str) -> Optional[dict]:
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM suggestions WHERE id = ?", (sid,)).fetchone():
+            return None
+        conn.execute(
+            "UPDATE suggestions SET status = ?, updated_at = ? WHERE id = ?",
+            (status, _utcnow(), sid),
+        )
+        row = conn.execute("SELECT * FROM suggestions WHERE id = ?", (sid,)).fetchone()
+        return _suggestion_out(row_to_dict(row))
+
+
+def count_pending_suggestions(user_id: str | None = None) -> int:
+    with get_conn() as conn:
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM suggestions WHERE status = 'pending' AND user_id = ?",
+                (user_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM suggestions WHERE status = 'pending'"
+            ).fetchone()
+        return int(row["c"])
+
+
+def delete_suggestion(sid: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM suggestions WHERE id = ?", (sid,))
         return cur.rowcount > 0

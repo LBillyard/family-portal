@@ -1,0 +1,14 @@
+[Unit]
+Description=The Hub — daily proactive inbox scan + nudge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/family-portal
+Environment=PYTHONUNBUFFERED=1
+Environment=ENV=production
+EnvironmentFile=-/opt/family-portal/.env
+ExecStart=/opt/family-portal/venv/bin/python -m server.jobs.inbox_scan

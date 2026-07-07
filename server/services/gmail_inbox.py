@@ -51,15 +51,18 @@ Per-kind fields (include ONLY when you actually know them — never guess):
 - document: {"expiry_date": "YYYY-MM-DD", "notes": str}
 
 ONLY extract:
-- Concrete FUTURE or DATED travel bookings/reservations (flights, hotels, trips) -> kind "trip".
-- Confirmed appointments with a date/time (medical, dental, viewings, services) -> kind "appointment".
-- Renewable documents worth a reminder: insurance policies, warranties, passports, MOT/road tax, memberships with a renewal or expiry date -> kind "document".
+- A "trip" is the FAMILY TRAVELLING/STAYING AWAY: a flight, a hotel/apartment stay, a holiday or getaway with a destination. A parcel/furniture/grocery DELIVERY to the house is NOT a trip.
+- An "appointment" is a confirmed date/time the family ATTENDS IN PERSON: medical, dental, a property viewing, a service visit, a booked class/event with a real date. It must be something they actually go to.
+- A "document" is a renewable/expiring record worth a reminder: insurance policy, warranty, passport, MOT/road tax, or a membership/subscription with a renewal or expiry date.
 
 SKIP entirely (return nothing for these):
-- Marketing, newsletters, promotions, "you might like", offers.
-- Purchase receipts / order confirmations for goods (handled elsewhere).
+- Marketing, newsletters, promotions, "you might like", offers, webinars/events they did not actually register for.
+- Purchase receipts / order confirmations for goods, and parcel/delivery notifications (a delivery is neither a trip nor an appointment).
+- Security/account notifications: "new device login", login/sign-in attempts, verification/OTP/2FA codes, password resets — these have a timestamp but are NOT appointments.
 - Vague, speculative, undated or "considering" mentions.
 - Anything without a clear, concrete title.
+
+The timestamp an email was SENT is never itself an appointment time — only extract a date/time that the email states the event actually happens.
 
 RULES:
 - "title" is a short human label, e.g. "Flights to Barcelona", "Dentist check-up", "Car insurance renewal".
@@ -69,7 +72,13 @@ RULES:
 
 
 def _model() -> str:
-    return os.environ.get("OPENROUTER_DEFAULT_MODEL", "").strip() or "openai/gpt-4o-mini"
+    """Classifying bookings/appointments/documents from messy email needs solid
+    instruction-following (gpt-4o-mini mislabels e.g. a furniture delivery as a
+    'trip' and a login-alert as an 'appointment'). Use a stronger model, matching
+    trip_intel; overridable via INBOX_EXTRACT_MODEL / OPENROUTER_SMART_MODEL."""
+    return (os.environ.get("INBOX_EXTRACT_MODEL", "").strip()
+            or os.environ.get("OPENROUTER_SMART_MODEL", "").strip()
+            or "openai/gpt-4o")
 
 
 def _str(value) -> str:
@@ -221,10 +230,14 @@ async def commit(items: list[dict]) -> dict:
                     appt["category"] = item["category"]
                 db.create_appointment(appt, default_user=default_user)
             elif kind == "document":
+                # Populate BOTH expiry columns from the one date: expiry_date feeds
+                # the renewal reminder, expiry feeds the Vault status badge.
+                exp = item.get("expiry_date")
                 db.create_document({
                     "name": title,
                     "category": "personal",
-                    "expiry_date": item.get("expiry_date"),
+                    "expiry": exp,
+                    "expiry_date": exp,
                     "notes": item.get("notes") or "",
                 })
         except Exception:

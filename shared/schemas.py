@@ -296,6 +296,7 @@ class NotificationPrefsUpdate(BaseModel):
     large_transaction_threshold: Optional[int] = None
     weekly_finance_summary: Optional[bool] = None
     budget_alerts: Optional[bool] = None
+    proactive_inbox: Optional[bool] = None
 
 
 class TradespersonCreate(BaseModel):
@@ -337,6 +338,10 @@ class InboxImportItem(BaseModel):
 
 class InboxImport(BaseModel):
     items: List[InboxImportItem]
+
+
+class SuggestionActionRequest(BaseModel):
+    action: Literal["accept", "dismiss"]
 
 
 class ShoppingItemCreate(BaseModel):

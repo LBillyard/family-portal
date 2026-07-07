@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Family Portal proactive inbox scan at 07:30 Europe/London
+
+[Timer]
+# Timezone-aware: fires at 07:30 UK local time (handles BST/GMT automatically).
+# Mirrors the digest convention — expressing the time as UK local means systemd
+# resolves BST/GMT for us. Persistent catches up a run the box missed while off.
+OnCalendar=*-*-* 07:30:00 Europe/London
+Persistent=true
+
+[Install]
+WantedBy=timers.target
