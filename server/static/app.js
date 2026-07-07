@@ -1802,11 +1802,12 @@ function renderFinances(data) {
       <td>${fmt.date(t.date)}</td>
       <td>${esc(t.display_name || t.description)}${showRaw ? `<br><span class="txn-raw">${esc(t.description)}</span>` : ''}</td>
       <td><select class="txn-cat" data-txn-id="${t.id}" aria-label="Category">${opts}</select></td>
+      <td>${personSelect(t)}</td>
       <td>${esc(t.account)}</td>
       <td class="amount-cell ${t.amount >= 0 ? 'positive' : 'negative'}">${fmt.gbp(t.amount)}</td>
     </tr>`;
     })
-    .join('') || '<tr><td colspan="5" class="hint-small">No transactions yet — log one, import a CSV or connect a bank.</td></tr>';
+    .join('') || '<tr><td colspan="6" class="hint-small">No transactions yet — log one, import a CSV or connect a bank.</td></tr>';
 
   renderCategoryBreakdown(category_breakdown);
 }
@@ -1827,6 +1828,79 @@ function renderCategoryBreakdown(items) {
       <div class="budget-row" style="margin-bottom:10px">
         <div class="budget-row-head"><span>${esc(i.category)}</span><span>${fmt.gbp(i.spent)} · ${i.count}</span></div>
         <div class="progress-bar budget"><div class="progress-fill" style="width:${Math.round((i.spent / max) * 100)}%"></div></div>
+      </div>`
+    )
+    .join('');
+}
+
+// --- Finances: per-transaction "who spent" tagging + forecast + by-person ---
+// Person keys the backend uses: 'luke' | 'partner' | 'joint' | null/'unassigned'.
+// Display names are fixed for this household (partner === Laura).
+const PERSON_LABELS = { luke: 'Luke', partner: 'Laura', joint: 'Joint', unassigned: 'Unassigned' };
+// Options for the compact per-row selector — value '' maps to null (untagged).
+const PERSON_OPTIONS = [['', '—'], ['luke', 'Luke'], ['partner', 'Laura'], ['joint', 'Joint']];
+
+function personSelect(t) {
+  const cur = t.person || '';
+  const opts = PERSON_OPTIONS
+    .map(([v, l]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`)
+    .join('');
+  return `<select class="txn-person" data-role="txn-person" data-txn-id="${t.id}" aria-label="Who spent">${opts}</select>`;
+}
+
+// Money-left-this-month forecast card (own endpoint; degrades gracefully).
+async function loadForecast() {
+  const el = document.getElementById('finance-forecast');
+  if (!el) return;
+  try {
+    renderForecast(await api('/finances/forecast'));
+  } catch {
+    el.innerHTML = '<p class="hint-small">Forecast unavailable.</p>';
+  }
+}
+
+function renderForecast(d) {
+  const el = document.getElementById('finance-forecast');
+  if (!el) return;
+  if (!d) {
+    el.innerHTML = '<p class="hint-small">Not enough data yet — log some transactions to project your month-end balance.</p>';
+    return;
+  }
+  const positive = Number(d.projected_month_end_cash) >= 0;
+  const days = Number(d.days_left);
+  el.innerHTML = `
+    <div class="forecast-figure ${positive ? 'pos' : 'neg'}">${fmt.gbp(d.projected_month_end_cash)}</div>
+    <p class="forecast-sub">projected balance at the end of ${esc(d.month_label)}</p>
+    <p class="hint-small forecast-breakdown">Now ${fmt.gbp(d.current_cash)} − bills due ${fmt.gbp(d.bills_due_remaining)} − projected spend ${fmt.gbp(d.projected_further_spend)}</p>
+    <p class="hint-small">${days} day${days === 1 ? '' : 's'} left in ${esc(d.month_label)} · spent ${fmt.gbp(d.spent_so_far)} so far (~${fmt.gbp(d.avg_daily_spend)}/day)</p>`;
+}
+
+// Spending-by-person mini-breakdown (own endpoint; degrades gracefully).
+async function loadByPerson() {
+  const el = document.getElementById('finance-by-person');
+  if (!el) return;
+  try {
+    renderByPerson(await api('/finances/by-person'));
+  } catch {
+    el.innerHTML = '<p class="hint-small">Spending by person unavailable.</p>';
+  }
+}
+
+function renderByPerson(d) {
+  const el = document.getElementById('finance-by-person');
+  if (!el) return;
+  const people = ((d && d.people) || []).filter((p) => Math.abs(Number(p.amount) || 0) > 0);
+  if (!people.length) {
+    el.innerHTML = '<p class="hint-small">No spending tagged yet — set “who” on a transaction to see the split.</p>';
+    return;
+  }
+  const max = Math.max(...people.map((p) => Math.abs(Number(p.amount) || 0)), 1);
+  el.innerHTML = people
+    .map(
+      (p) => `
+      <div class="budget-row" style="margin-bottom:10px">
+        <div class="budget-row-head"><span>${esc(PERSON_LABELS[p.person] || p.person)}</span><span>${fmt.gbp(p.amount)}</span></div>
+        <div class="progress-bar budget"><div class="progress-fill" style="width:${Math.round((Math.abs(Number(p.amount) || 0) / max) * 100)}%"></div></div>
       </div>`
     )
     .join('');
@@ -5957,6 +6031,21 @@ function initActions() {
       return;
     }
 
+    // Transactions — tag "who spent" (Luke / Laura / Joint / — for untagged).
+    const personSel = e.target.closest('[data-role="txn-person"]');
+    if (personSel && personSel.dataset.txnId) {
+      api(`/transactions/${personSel.dataset.txnId}/person`, {
+        method: 'PATCH',
+        body: JSON.stringify({ person: personSel.value || null }),
+      })
+        .then(() => {
+          showToast('Updated who spent');
+          loadByPerson();  // refresh the by-person breakdown to reflect the change
+        })
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+
     const sel = e.target.closest('.txn-cat');
     if (!sel || !sel.dataset.txnId) return;
     api(`/transactions/${sel.dataset.txnId}`, {
@@ -6988,6 +7077,8 @@ async function load() {
   if (calendar) renderCalendar(calendar);
   if (finances) renderFinances(finances);
   loadInsights();   // Finances → Insights card (own endpoint)
+  loadForecast();   // Finances → Money-left-this-month forecast card (own endpoint)
+  loadByPerson();   // Finances → Spending-by-person breakdown (own endpoint)
   loadNetWorth();   // Finances → Net worth + assets (own endpoints)
   loadTrends();     // Finances → Trends card: spend + net-worth charts (own endpoints)
   if (renewals) renderRenewals(renewals);

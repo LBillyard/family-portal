@@ -24,6 +24,7 @@ from server.services import search as search_svc, trips as trips_svc, categorize
 from server.services import weather as weather_svc, gmail_receipts, push as push_svc
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
 from server.services import insights, networth, occasions, vehicles as vehicles_svc
+from server.services import cashflow
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
@@ -45,6 +46,7 @@ from shared.schemas import (
     DependentCreate,
     DependentUpdate,
     TransactionCategoryUpdate,
+    TransactionPersonUpdate,
     DocumentCreate,
     EmailReceiptImport,
     EventCreate,
@@ -630,6 +632,19 @@ def recategorize_transaction(txn_id: str, body: TransactionCategoryUpdate, _: di
     return {"ok": True, "category": body.category, "reclassified": 1}
 
 
+@router.patch("/transactions/{txn_id}/person")
+def assign_transaction_person(txn_id: str, body: TransactionPersonUpdate, _: dict = Depends(require_user)):
+    person = body.person
+    if person in ("", "unassigned"):
+        person = None
+    if person not in (None, "luke", "partner", "joint"):
+        raise HTTPException(status_code=400, detail="Invalid person")
+    item = db.set_transaction_person(txn_id, person)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return {"transaction": item}
+
+
 @router.post("/finances/categorize")
 def categorize_all(_: dict = Depends(require_user)):
     return db.apply_categorization()
@@ -981,6 +996,16 @@ def api_finances_networth_trend(_: dict = Depends(require_user)):
 @router.get("/finances/spend-trend")
 def api_finances_spend_trend(_: dict = Depends(require_user)):
     return insights.build_spend_trend()
+
+
+@router.get("/finances/forecast")
+def api_finances_forecast(_: dict = Depends(require_user)):
+    return cashflow.build_forecast()
+
+
+@router.get("/finances/by-person")
+def api_finances_by_person(_: dict = Depends(require_user)):
+    return {"people": db.spend_by_person()}
 
 
 @router.get("/assets")

@@ -5047,6 +5047,37 @@ dialog select:focus {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Finances — Money-left forecast + spending by person                        */
+/* -------------------------------------------------------------------------- */
+.forecast-figure {
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.forecast-figure.pos { color: var(--green); }
+.forecast-figure.neg { color: var(--red); }
+.forecast-sub {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 4px 0 12px;
+}
+.forecast-breakdown { margin-bottom: 4px; }
+
+/* Compact per-row "who spent" selector — deliberately quiet so the txn list stays clean */
+.txn-person {
+  font-size: 0.8125rem;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  max-width: 84px;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Finances — Net worth + assets                                              */
 /* -------------------------------------------------------------------------- */
 .networth-headline {

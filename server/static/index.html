@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=47">
+  <link rel="stylesheet" href="/static/style.css?v=48">
   <script>
     // No-flash theme guard: set the theme attribute before first paint.
     // 'system' (or unset) leaves the attribute off so prefers-color-scheme wins.
@@ -325,6 +325,17 @@
           </div>
         </div>
 
+        <div class="two-col" style="margin:16px 0">
+          <div class="card" id="forecast-card">
+            <div class="card-header"><h3>Money left this month</h3><p>Projected month-end cash — estimates, not a promise</p></div>
+            <div id="finance-forecast"></div>
+          </div>
+          <div class="card" id="by-person-card">
+            <div class="card-header"><h3>Spending by person</h3><p>Who's spending what this month</p></div>
+            <div id="finance-by-person"></div>
+          </div>
+        </div>
+
         <div class="card" id="trends-card" style="margin:16px 0">
           <div class="card-header"><h3>Trends</h3><p>Spending over the last 6 months &amp; your net-worth history</p></div>
           <div class="trends-grid">
@@ -396,7 +407,7 @@
           </div>
           <div class="table-wrap">
             <table class="data-table">
-              <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead>
+              <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Who</th><th>Account</th><th>Amount</th></tr></thead>
               <tbody id="finance-transactions"></tbody>
             </table>
           </div>
@@ -756,6 +767,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=47"></script>
+  <script src="/static/app.js?v=48"></script>
 </body>
 </html>

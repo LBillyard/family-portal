@@ -520,6 +520,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col, ddl in [
         ("hidden", "ALTER TABLE transactions ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"),
         ("merchant_key", "ALTER TABLE transactions ADD COLUMN merchant_key TEXT"),
+        ("person", "ALTER TABLE transactions ADD COLUMN person TEXT"),
     ]:
         if col not in tcols:
             conn.execute(ddl)
@@ -1175,6 +1176,7 @@ def _txn_out(r: dict) -> dict:
         "category": r["category"],
         "amount": r["amount"],
         "account": r.get("account_name") or r.get("account_id", ""),
+        "person": r.get("person"),
     }
 
 
@@ -1540,6 +1542,37 @@ def set_transaction_category(txn_id: str, category: str) -> Optional[dict]:
             return None
         conn.execute("UPDATE transactions SET category = ?, hidden = ? WHERE id = ?", (category, hidden, txn_id))
     return get_transaction(txn_id)
+
+
+def set_transaction_person(txn_id: str, person: Optional[str]) -> Optional[dict]:
+    """Assign a transaction to a person ('luke'|'partner'|'joint') or clear it.
+    None/''/'unassigned' store NULL. Returns the updated txn, or None if not found."""
+    value = person if person not in (None, "", "unassigned") else None
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM transactions WHERE id = ?", (txn_id,)).fetchone():
+            return None
+        conn.execute("UPDATE transactions SET person = ? WHERE id = ?", (value, txn_id))
+    return get_transaction(txn_id)
+
+
+def spend_by_person(month: Optional[str] = None) -> list[dict]:
+    """Spend (ABS of outgoings) grouped by person for a 'YYYY-MM' month.
+    Defaults to the latest month present in the ledger, else the current month.
+    Excludes hidden rows. Persons with no spend are omitted; sorted amount desc."""
+    with get_conn() as conn:
+        if not month:
+            latest = conn.execute("SELECT MAX(txn_date) FROM transactions").fetchone()[0]
+            month = latest[:7] if latest else date.today().strftime("%Y-%m")
+        rows = conn.execute(
+            """SELECT COALESCE(person, 'unassigned') AS person,
+                      COALESCE(SUM(ABS(amount)), 0) AS spent
+               FROM transactions
+               WHERE hidden = 0 AND amount < 0 AND txn_date LIKE ?
+               GROUP BY COALESCE(person, 'unassigned')
+               ORDER BY spent DESC""",
+            (f"{month}%",),
+        ).fetchall()
+        return [{"person": r["person"], "amount": round(r["spent"], 2)} for r in rows if r["spent"]]
 
 
 def category_breakdown() -> list[dict]:

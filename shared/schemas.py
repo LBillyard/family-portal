@@ -212,6 +212,10 @@ class TransactionCategoryUpdate(BaseModel):
     learn: bool = True
 
 
+class TransactionPersonUpdate(BaseModel):
+    person: Optional[str] = None  # 'luke' | 'partner' | 'joint' | null
+
+
 class DocumentCreate(BaseModel):
     name: str
     category: str = "other"
