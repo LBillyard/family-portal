@@ -19,6 +19,7 @@ from server.services import email_search as email_svc
 from server.services import memory as mem_svc
 from server.services import occasions as occasions_svc
 from server.services import search as search_svc
+from server.services import trip_intel
 from server.services import trips as trips_svc
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ SYSTEM_PROMPT = """You are The Hub, the household assistant for a UK family (two
 You can read household data and take actions using tools across the whole home:
 - Diary & jobs: calendar events, tasks, appointments, the shopping list, meal plans and recipes.
 - Money: bills, transactions, and finance summaries (you can't connect banks or move money).
-- Family life: birthdays & anniversaries (occasions), gift ideas (wishlist), the kids' & pets' care (jabs/checkups), cars (MOT/tax/insurance/service), holidays & trips.
+- Family life: birthdays & anniversaries (occasions), gift ideas (wishlist), the kids' & pets' care (jabs/checkups), cars (MOT/tax/insurance/service), holidays & trips. For holidays you can build a trip's day-by-day itinerary from their travel-booking emails (build_trip_itinerary_from_email) and spot trips hiding in the inbox from flight/hotel confirmations (find_trips_in_email).
 - Email: you CAN search their connected Gmail (read-only) with search_email when they ask about something in their inbox — insurance renewals, bookings, vet/appointment details, "what did X say", finding an invoice, etc. Use a focused query, read the results, then answer. You can then record what you find: save a fact with remember_fact, add a diary/appointment/task, or save an attached document to the Vault with file_email_attachment (using the message_id from the search).
 - Long-term memory: you remember durable facts about the family. The "long-term memory" block (when shown) is what you already know — weave it in naturally, don't recite it. When they tell you something worth keeping for the future ("Arthur's shoe size is 6", "we're vegetarian now", "the boiler is a Worcester Bosch"), call remember_fact. Don't remember one-off/transient things.
 
@@ -623,6 +624,35 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_trips_in_email",
+            "description": ("Scan the user's connected Gmail (read-only) for flight/hotel bookings and "
+                            "propose distinct holiday trips they could add. Use when they ask 'what trips "
+                            "are in my email?', 'did I book anything?', or want you to find upcoming holidays. "
+                            "Returns proposals with title/destination/dates — offer to create ones they want "
+                            "with create_holiday_trip."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "build_trip_itinerary_from_email",
+            "description": ("Build a holiday trip's day-by-day itinerary from the user's travel-booking "
+                            "emails (flights, hotels, transfers, activities) and add the items to that trip. "
+                            "Use when they say 'fill in the itinerary for our Algarve trip from my emails' or "
+                            "similar. Identify the trip by trip_id (preferred, from context) or trip_name."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trip_id": {"type": "string", "description": "The trip's id (from holiday_trips in context)."},
+                    "trip_name": {"type": "string", "description": "Trip title or destination to match if no id."},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -1121,6 +1151,60 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
             return await asyncio.to_thread(
                 email_svc.file_attachment, uid, args.get("message_id", ""), args.get("filename")
             )
+        if name == "find_trips_in_email":
+            res = await trip_intel.detect_trips(uid)
+            return {
+                "ok": True,
+                "proposals": res.get("proposals", []),
+                "scanned": res.get("scanned", 0),
+                "needs_reconnect": res.get("needs_reconnect", []),
+            }
+        if name == "build_trip_itinerary_from_email":
+            trip = None
+            if args.get("trip_id"):
+                trip = db.get_trip_detail(args["trip_id"])
+            if not trip and args.get("trip_name"):
+                needle = args["trip_name"].strip().lower()
+                trip = next(
+                    (t for t in db.list_trips()
+                     if needle in (t.get("title") or "").lower()
+                     or needle in (t.get("destination") or "").lower()),
+                    None,
+                )
+            if not trip:
+                return {"ok": False, "error": "Which trip? I couldn't find that one."}
+            res = await trip_intel.scan_for_trip(uid, trip)
+            added = []
+            for c in res.get("candidates", []):
+                title = (c.get("title") or "").strip()
+                if not title:
+                    continue
+                kind = c.get("kind")
+                kind = kind if kind in trip_intel.ITINERARY_KINDS else "other"
+                item = db.create_itinerary_item({
+                    "trip_id": trip["id"],
+                    "title": title,
+                    "kind": kind,
+                    "day_date": c.get("day_date"),
+                    "start_time": c.get("start_time"),
+                    "location": c.get("location"),
+                    "notes": c.get("notes"),
+                })
+                added.append({
+                    "day_date": item.get("day_date"),
+                    "start_time": item.get("start_time"),
+                    "kind": item.get("kind"),
+                    "title": item.get("title"),
+                    "location": item.get("location"),
+                })
+            return {
+                "ok": True,
+                "trip": trip.get("title"),
+                "added": len(added),
+                "items": added,
+                "scanned": res.get("scanned", 0),
+                "needs_reconnect": res.get("needs_reconnect", []),
+            }
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)

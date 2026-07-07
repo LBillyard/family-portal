@@ -2250,7 +2250,7 @@ dialog select:focus {
   padding-top: 14px;
   border-top: 1px solid var(--border-light);
 }
-.itin-head { margin-bottom: 10px; }
+.itin-head { margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
 .itin-empty { margin: 4px 0; }
 .itin-day { margin-bottom: 14px; }
 .itin-day:last-child { margin-bottom: 0; }
@@ -2292,6 +2292,26 @@ dialog select:focus {
 .itin-notes { font-size: 0.8125rem; color: var(--text-muted); margin-top: 2px; }
 .itin-add-slot:empty { display: none; }
 .itin-add-slot .row-edit { margin-top: 10px; }
+
+/* "Build from email" review list — reuses .mem-cand rows + .row-edit-actions. */
+.itin-scan-slot:empty { display: none; }
+.itin-scan-box {
+  margin: 10px 0;
+  padding: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+.itin-scan-head {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.itin-scan-note { margin: 0 0 8px; color: var(--accent); }
+.scan-cand-list { margin-bottom: 10px; }
 
 .status-tag {
   display: inline-block;

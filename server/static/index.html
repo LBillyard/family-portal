@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=51">
+  <link rel="stylesheet" href="/static/style.css?v=52">
   <script>
     // No-flash theme guard: set the theme attribute before first paint.
     // 'system' (or unset) leaves the attribute off so prefers-color-scheme wins.
@@ -597,6 +597,11 @@
           </div>
         </div>
 
+        <div class="trip-detect" style="margin-bottom:24px">
+          <button class="btn btn-outline wf-action" data-action="find-trips-email">✨ Find trips in my email</button>
+          <div id="trip-proposals" class="holiday-grid" style="margin-top:16px" hidden></div>
+        </div>
+
         <div class="card-header" style="margin-bottom:16px"><h3 style="font-size:1.0625rem;font-weight:700;color:var(--navy-900)">Your trips</h3></div>
         <div id="holiday-trips" class="holiday-grid" style="margin-bottom:28px"></div>
 
@@ -771,6 +776,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=51"></script>
+  <script src="/static/app.js?v=52"></script>
 </body>
 </html>

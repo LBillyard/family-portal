@@ -26,6 +26,7 @@ from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_tw
 from server.services import insights, networth, occasions, vehicles as vehicles_svc
 from server.services import cashflow
 from server.services import export_data
+from server.services import trip_intel
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
@@ -1423,6 +1424,50 @@ def delete_itinerary_route(item_id: str, user: dict = Depends(require_user)):
     if not ok:
         raise HTTPException(status_code=404, detail="Itinerary item not found")
     return {"ok": ok}
+
+
+# --- Trip intelligence (build itinerary from travel emails, detect trips) ---
+
+@router.post("/trips/{trip_id}/scan-email")
+async def trip_scan_email(trip_id: str, user: dict = Depends(require_user)):
+    """Scan the user's Gmail for itinerary items belonging to this trip.
+    Read-only — returns candidates for the user to review, writes nothing."""
+    trip = db.get_trip_detail(trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    return await trip_intel.scan_for_trip(user["id"], trip)
+
+
+@router.post("/trips/{trip_id}/itinerary/import")
+def trip_import_itinerary(
+    trip_id: str, items: list[dict] = Body(..., embed=True), _: dict = Depends(require_user)
+):
+    """Create the user's chosen itinerary items (from a prior scan) on this trip."""
+    if db.get_trip_detail(trip_id) is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    created = []
+    for it in items or []:
+        title = str((it or {}).get("title") or "").strip()
+        if not title:
+            continue  # skip blanks
+        kind = it.get("kind")
+        kind = kind if kind in trip_intel.ITINERARY_KINDS else "other"
+        created.append(db.create_itinerary_item({
+            "trip_id": trip_id,
+            "title": title,
+            "kind": kind,
+            "day_date": it.get("day_date"),
+            "start_time": it.get("start_time"),
+            "location": it.get("location"),
+            "notes": it.get("notes"),
+        }))
+    return {"added": len(created), "items": created}
+
+
+@router.get("/trips/detect-email")
+async def trips_detect_email(user: dict = Depends(require_user)):
+    """Scan Gmail for flight/hotel bookings and propose distinct trips to add."""
+    return await trip_intel.detect_trips(user["id"])
 
 
 @router.post("/finances/scan-receipt")

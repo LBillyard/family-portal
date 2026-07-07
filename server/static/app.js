@@ -3095,7 +3095,9 @@ function renderItinerary(tripId) {
   body.innerHTML = `
     <div class="itin-head">
       <button type="button" class="btn btn-sm btn-soft wf-action" data-action="add-itinerary" data-trip-id="${esc(tripId)}">+ Add itinerary item</button>
+      <button type="button" class="btn btn-sm btn-soft wf-action" data-action="scan-trip-email" data-trip-id="${esc(tripId)}">✨ Build from email</button>
     </div>
+    <div class="itin-scan-slot"></div>
     ${items.length ? groupsHtml : '<p class="hint-small itin-empty">No plans yet — add flights, hotels and activities to build your day-by-day itinerary.</p>'}
     <div class="itin-add-slot"></div>`;
   const toggle = document.getElementById(`itin-toggle-${tripId}`);
@@ -3116,6 +3118,131 @@ async function loadItinerary(tripId) {
     if (body) body.innerHTML = '<p class="hint-small">Couldn\'t load itinerary.</p>';
     showToast(err.message, true);
   }
+}
+
+// --- "Build from email": scan a trip's inbox for bookings, review, import ---
+// POST /api/trips/{id}/scan-email returns { candidates, scanned, needs_reconnect }.
+// Candidates are cached per-trip so a checked box can resolve back to the full
+// candidate object (all fields) when we POST the selection to itinerary/import.
+const TRIP_SCAN_EMOJI = { flight: '✈️', hotel: '🏨', activity: '🎡', food: '🍽️', transport: '🚗', other: '📋' };
+
+function tripScanSlot(tripId) {
+  return document.getElementById(`itin-body-${tripId}`)?.querySelector('.itin-scan-slot');
+}
+
+async function scanTripEmail(tripId, btn) {
+  const slot = tripScanSlot(tripId);
+  if (!slot) return;
+  slot.innerHTML = '<div class="itin-scan-box"><p class="hint-small">✨ Scanning your inbox…</p></div>';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api(`/trips/${encodeURIComponent(tripId)}/scan-email`, { method: 'POST' });
+    renderTripScanReview(tripId, res);
+  } catch (err) {
+    slot.innerHTML = '';
+    showToast(err.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderTripScanReview(tripId, res) {
+  const slot = tripScanSlot(tripId);
+  if (!slot) return;
+  const cands = res.candidates || [];
+  if (!store.tripScanCands) store.tripScanCands = {};
+  store.tripScanCands[tripId] = cands;
+  const reconnect = (res.needs_reconnect || []).length
+    ? '<p class="hint-small itin-scan-note">Reconnect Gmail in Settings to scan every inbox.</p>'
+    : '';
+  if (!cands.length) {
+    const emptyMsg = res.no_account
+      ? 'Connect your Gmail in Settings to build itineraries from your travel emails.'
+      : 'No travel bookings found in your email for this trip.';
+    slot.innerHTML = `
+      <div class="itin-scan-box">
+        ${reconnect}
+        <p class="hint-small">${emptyMsg}</p>
+        <div class="row-edit-actions">
+          <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-trip-scan" data-trip-id="${esc(tripId)}">Close</button>
+        </div>
+      </div>`;
+    return;
+  }
+  const rows = cands.map((c, i) => {
+    const emoji = TRIP_SCAN_EMOJI[c.kind] || TRIP_SCAN_EMOJI.other;
+    const meta = [fmtShortDate(c.day_date), c.start_time ? String(c.start_time).slice(0, 5) : '', c.location || '']
+      .filter(Boolean).map((s) => esc(s)).join(' · ');
+    return `
+      <label class="mem-cand">
+        <input type="checkbox" class="mem-cand-cb scan-cand-cb" data-idx="${i}" checked>
+        <span class="itin-emoji">${emoji}</span>
+        <span class="mem-cand-body">
+          <span class="mem-cand-text">${esc(c.title || 'Untitled')}</span>
+          <span class="mem-cand-meta">${meta || '—'}</span>
+        </span>
+      </label>`;
+  }).join('');
+  slot.innerHTML = `
+    <div class="itin-scan-box">
+      ${reconnect}
+      <div class="itin-scan-head">Found ${cands.length} · scanned ${esc(String(res.scanned ?? 0))} emails</div>
+      <div class="scan-cand-list">${rows}</div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="import-scanned-itinerary" data-trip-id="${esc(tripId)}">Add ${cands.length} to itinerary</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-trip-scan" data-trip-id="${esc(tripId)}">Cancel</button>
+      </div>
+    </div>`;
+  // Keep the "Add N" button label in step with the checked count.
+  slot.querySelector('.scan-cand-list')?.addEventListener('change', () => {
+    const n = slot.querySelectorAll('.scan-cand-cb:checked').length;
+    const b = slot.querySelector('[data-action="import-scanned-itinerary"]');
+    if (b) b.textContent = `Add ${n} to itinerary`;
+  });
+}
+
+// --- "Find trips in my email": propose whole trips from booking emails ---
+// GET /api/trips/detect-email returns { proposals: [{title,destination,start_date,end_date,summary}] }.
+async function findTripsInEmail(btn) {
+  const wrap = document.getElementById('trip-proposals');
+  if (!wrap) return;
+  wrap.hidden = false;
+  wrap.innerHTML = '<p class="hint-small">✨ Scanning your inbox for trips…</p>';
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/trips/detect-email');
+    renderTripProposals(res.proposals || []);
+  } catch (err) {
+    wrap.innerHTML = '<p class="hint-small">Couldn\'t scan your email for trips.</p>';
+    showToast(err.message, true);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderTripProposals(proposals) {
+  const wrap = document.getElementById('trip-proposals');
+  if (!wrap) return;
+  if (!proposals.length) {
+    wrap.innerHTML = '<p class="hint-small">No new trips found in your email.</p>';
+    return;
+  }
+  store.tripProposals = {};
+  wrap.innerHTML = proposals.map((p, i) => {
+    store.tripProposals[i] = p;
+    const dates = [fmtShortDate(p.start_date, true), fmtShortDate(p.end_date, true)].filter(Boolean).join(' → ');
+    return `
+      <article class="idea-card">
+        <div class="idea-tags"><span class="idea-tag">✨ From email</span></div>
+        <h4>${esc(p.title || p.destination || 'Trip')}</h4>
+        ${p.destination ? `<p style="font-size:0.875rem;color:var(--text-muted)">${esc(p.destination)}</p>` : ''}
+        ${dates ? `<p style="font-size:0.8125rem;color:var(--text-muted);margin-top:4px">${esc(dates)}</p>` : ''}
+        ${p.summary ? `<p style="font-size:0.875rem;margin-top:8px">${esc(p.summary)}</p>` : ''}
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-sm btn-primary wf-action" data-action="create-trip-from-proposal" data-proposal-idx="${i}">Create trip</button>
+        </div>
+      </article>`;
+  }).join('');
 }
 
 function docStatusLabel(status) {
@@ -4681,6 +4808,24 @@ function initActions() {
       openCompareTripsModal();
       return;
     }
+    if (action === 'find-trips-email') {
+      findTripsInEmail(btn);
+      return;
+    }
+    if (action === 'create-trip-from-proposal') {
+      const p = store.tripProposals?.[btn.dataset.proposalIdx];
+      if (!p) return;
+      btn.disabled = true;
+      btn.textContent = 'Creating…';
+      api('/holidays/trips', {
+        method: 'POST',
+        body: JSON.stringify({ title: p.title || p.destination || 'Trip', destination: p.destination || null }),
+      }).then(async () => {
+        showToast('Trip created from your email');
+        await load();
+      }).catch((err) => { showToast(err.message, true); btn.disabled = false; btn.textContent = 'Create trip'; });
+      return;
+    }
     if (action === 'edit-trip') {
       if (btn.dataset.tripId) openEditTripModal(btn.dataset.tripId);
       return;
@@ -5342,6 +5487,34 @@ function initActions() {
       api(`/itinerary/${btn.dataset.itinId}`, { method: 'DELETE' })
         .then(() => loadItinerary(tripId)).then(() => showToast('Itinerary item deleted'))
         .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'scan-trip-email') {
+      scanTripEmail(btn.dataset.tripId, btn);
+      return;
+    }
+    if (action === 'cancel-trip-scan') {
+      const slot = tripScanSlot(btn.dataset.tripId);
+      if (slot) slot.innerHTML = '';
+      return;
+    }
+    if (action === 'import-scanned-itinerary') {
+      const tripId = btn.dataset.tripId;
+      const slot = tripScanSlot(tripId);
+      const cands = store.tripScanCands?.[tripId] || [];
+      const items = [...(slot?.querySelectorAll('.scan-cand-cb') || [])]
+        .filter((cb) => cb.checked)
+        .map((cb) => cands[parseInt(cb.dataset.idx, 10)])
+        .filter(Boolean);
+      if (!items.length) { showToast('Tick at least one booking to add', true); return; }
+      btn.disabled = true;
+      api(`/trips/${encodeURIComponent(tripId)}/itinerary/import`, {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+      }).then((r) => {
+        if (slot) slot.innerHTML = '';
+        return loadItinerary(tripId).then(() => showToast(`Added ${r.added ?? items.length} to your itinerary.`));
+      }).catch((err) => { showToast(err.message, true); btn.disabled = false; });
       return;
     }
 
