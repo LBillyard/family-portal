@@ -31,7 +31,6 @@ _NUMERIC_KEYS = {
     "spent_so_far",
     "avg_daily_spend",
     "projected_further_spend",
-    "expected_income_remaining",
     "bills_due_remaining",
     "projected_month_end_cash",
 }
@@ -94,10 +93,10 @@ def test_build_forecast_returns_documented_keys_and_types():
     assert fc["as_of"] == date.today().isoformat()
     assert 0 <= fc["days_left"] <= 31
 
-    # The headline number is exactly the documented combination of the parts:
-    # current cash + income still expected − projected further spend.
+    # The headline number is a conservative "before income" floor:
+    # current spendable cash − projected further everyday spend.
     expected_end = round(
-        fc["current_cash"] + fc["expected_income_remaining"] - fc["projected_further_spend"], 2
+        fc["current_cash"] - fc["projected_further_spend"], 2
     )
     assert fc["projected_month_end_cash"] == expected_end
 

@@ -1,17 +1,19 @@
-"""Cashflow forecast — "how much money is left this month".
+"""Cashflow forecast — a conservative "money left this month" estimate.
 
-Projects the household's month-end cash position honestly:
-  projected = current spendable cash + expected income still to come
-              − projected further spending
+Raw multi-account bank feeds are noisy for this: money moved between your own
+accounts often isn't labelled "Transfers", and salary/mortgage-sized items are
+lumpy — so a naive spend/income rate is wildly skewed. To stay honest and stable
+we:
+  * exclude Transfers / Savings / Crypto categories (internal shuffles), and
+  * exclude any single transaction >= £1,000 from the *spending rate* (those are
+    transfers or big one-offs, not the everyday drip of living costs), and
+  * base the rate on a trailing 30-day window (not a spiky start-of-month), and
+  * do NOT try to project lumpy income — the figure is framed as the balance
+    "before any income lands", i.e. a conservative floor.
 
-Spending/income rates are a trailing 30-day average (stable, and not thrown off
-by a spiky start to the month), and TRANSFERS / SAVINGS / CRYPTO shuffles are
-excluded (they're internal money movements, not real spending or income — this
-matches the Insights "spending by category" and finance_summary logic). Bills
-still unpaid this month are surfaced for context but NOT double-subtracted, since
-the trailing spend average already reflects the household's recurring outgoings.
-
-Everything is defensive: bad/missing data is skipped and build_forecast() never
+projected = current spendable cash − (everyday daily spend × days left).
+Unpaid bills this month are surfaced for context but not double-subtracted (the
+everyday spend rate already includes recurring bills). build_forecast() never
 raises.
 """
 
@@ -22,23 +24,21 @@ from datetime import date, timedelta
 
 from server import database as db
 
-# Locale-independent month names (strftime('%B') depends on the active locale).
 _MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
 
 _TRAILING_DAYS = 30
+_BIG_TXN = 1000.0  # single items >= this are transfers/one-offs, not everyday spend
 
 
-def _excluded() -> tuple[set, set]:
-    """(spend_exclude, income_exclude) category sets — mirrors finance_summary."""
+def _spend_exclude() -> set:
     try:
         from server.services import categorize as cz
-        non_spend = set(cz.NON_SPEND_CATEGORIES)
+        return set(cz.NON_SPEND_CATEGORIES)
     except Exception:
-        non_spend = {"Income", "Transfers", "Savings", "Crypto"}
-    return non_spend, (non_spend - {"Income"})
+        return {"Income", "Transfers", "Savings", "Crypto"}
 
 
 def build_forecast() -> dict:
@@ -60,7 +60,7 @@ def build_forecast() -> dict:
         except (TypeError, ValueError):
             continue
 
-    spend_exclude, income_exclude = _excluded()
+    exclude = _spend_exclude()
     try:
         txns = db.list_transactions_for_analysis(limit=2000)
     except Exception:
@@ -69,33 +69,31 @@ def build_forecast() -> dict:
     month_key = f"{year:04d}-{month:02d}"
     trailing_cutoff = (today - timedelta(days=_TRAILING_DAYS)).isoformat()
 
-    spent_so_far = 0.0          # real spend THIS month (for display)
-    trailing_spend = 0.0        # real spend over the last 30 days
-    trailing_income = 0.0       # real income over the last 30 days
+    spent_so_far = 0.0     # everyday spend THIS month (for display)
+    trailing_spend = 0.0   # everyday spend over the last 30 days (drives the rate)
     for t in txns:
         try:
             amt = t.get("amount") or 0
-            if not amt:
+            if amt >= 0:
+                continue
+            cat = t.get("category") or ""
+            if cat in exclude:
+                continue
+            spend = -amt
+            if spend >= _BIG_TXN:  # transfer / big one-off — not the everyday rate
                 continue
             d = (t.get("date") or "")[:10]
-            cat = t.get("category") or ""
-            if amt < 0 and cat not in spend_exclude:
-                if d[:7] == month_key:
-                    spent_so_far += -amt
-                if d >= trailing_cutoff:
-                    trailing_spend += -amt
-            elif amt > 0 and cat not in income_exclude:
-                if d >= trailing_cutoff:
-                    trailing_income += amt
+            if d[:7] == month_key:
+                spent_so_far += spend
+            if d >= trailing_cutoff:
+                trailing_spend += spend
         except (TypeError, ValueError):
             continue
 
     daily_spend = trailing_spend / _TRAILING_DAYS if _TRAILING_DAYS else 0.0
-    daily_income = trailing_income / _TRAILING_DAYS if _TRAILING_DAYS else 0.0
     projected_further_spend = round(daily_spend * days_left, 2)
-    expected_income_remaining = round(daily_income * days_left, 2)
 
-    # Unpaid bills with a due-day in this month — shown for context only.
+    # Unpaid bills with a due-day this month — context only (not double-subtracted).
     bills_due_remaining = 0.0
     try:
         bills = db.list_bills()
@@ -113,7 +111,7 @@ def build_forecast() -> dict:
         except (TypeError, ValueError):
             continue
 
-    projected_end = round(current_cash + expected_income_remaining - projected_further_spend, 2)
+    projected_end = round(current_cash - projected_further_spend, 2)
 
     return {
         "as_of": today.isoformat(),
@@ -122,7 +120,6 @@ def build_forecast() -> dict:
         "spent_so_far": round(spent_so_far, 2),
         "avg_daily_spend": round(daily_spend, 2),
         "projected_further_spend": projected_further_spend,
-        "expected_income_remaining": expected_income_remaining,
         "bills_due_remaining": round(bills_due_remaining, 2),
         "projected_month_end_cash": projected_end,
         "month_label": f"{_MONTH_NAMES[month - 1]} {year}",
