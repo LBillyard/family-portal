@@ -476,6 +476,20 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Day-by-day itinerary entries for a holiday trip.
+            CREATE TABLE IF NOT EXISTS itinerary_items (
+                id TEXT PRIMARY KEY,
+                trip_id TEXT NOT NULL,
+                day_date TEXT,
+                start_time TEXT,
+                kind TEXT NOT NULL DEFAULT 'activity',
+                title TEXT NOT NULL,
+                location TEXT,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -1827,6 +1841,7 @@ def delete_trip(trip_id: str) -> bool:
             return False
         conn.execute("DELETE FROM holiday_checklist WHERE trip_id = ?", (trip_id,))
         conn.execute("DELETE FROM trip_documents WHERE trip_id = ?", (trip_id,))
+        conn.execute("DELETE FROM itinerary_items WHERE trip_id = ?", (trip_id,))
         conn.execute("UPDATE media_items SET trip_id = NULL WHERE trip_id = ?", (trip_id,))
         conn.execute("DELETE FROM holiday_trips WHERE id = ?", (trip_id,))
         return True
@@ -4159,3 +4174,101 @@ def vehicles_due_within(days: int) -> list[dict]:
                     })
     out.sort(key=lambda e: e["due_date"])
     return out
+
+
+# --- Trip itinerary ---
+
+def _itinerary_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "trip_id": r["trip_id"],
+        "day_date": r.get("day_date"),
+        "start_time": r.get("start_time"),
+        "kind": r["kind"],
+        "title": r["title"],
+        "location": r.get("location"),
+        "notes": r["notes"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_itinerary(trip_id: str) -> list[dict]:
+    """A trip's itinerary. Undated items sort last; within a day, timed items come
+    first in time order, then untimed items by insertion order."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM itinerary_items WHERE trip_id = ?
+               ORDER BY (day_date IS NULL), day_date, (start_time IS NULL), start_time, created_at""",
+            (trip_id,),
+        ).fetchall()
+        return [_itinerary_out(row_to_dict(r)) for r in rows]
+
+
+def get_itinerary_item(item_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM itinerary_items WHERE id = ?", (item_id,)).fetchone()
+        return _itinerary_out(row_to_dict(row)) if row else None
+
+
+def create_itinerary_item(data: dict) -> dict:
+    iid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO itinerary_items
+                   (id, trip_id, day_date, start_time, kind, title, location, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                iid,
+                data["trip_id"],
+                data.get("day_date"),
+                data.get("start_time"),
+                data.get("kind") or "activity",
+                data["title"].strip(),
+                data.get("location"),
+                data.get("notes") or "",
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM itinerary_items WHERE id = ?", (iid,)).fetchone()
+        return _itinerary_out(row_to_dict(row))
+
+
+def update_itinerary_item(item_id: str, data: dict) -> Optional[dict]:
+    """Partial update. The nullable fields (day_date/start_time/location) use
+    presence (`key in data`) so they can be cleared to NULL; `notes` coerces None
+    to '' to honour its NOT NULL constraint; `title`/`kind` are never blanked."""
+    fields, values = [], []
+    if data.get("title") is not None:
+        title = data["title"].strip()
+        if title:  # never blank the required title via PATCH
+            fields.append("title = ?")
+            values.append(title)
+    if data.get("kind") is not None:
+        fields.append("kind = ?")
+        values.append(data["kind"])
+    for key in ("day_date", "start_time", "location"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"] if data["notes"] is not None else "")
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM itinerary_items WHERE id = ?", (item_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(item_id)
+            conn.execute(f"UPDATE itinerary_items SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM itinerary_items WHERE id = ?", (item_id,)).fetchone()
+        return _itinerary_out(row_to_dict(row))
+
+
+def delete_itinerary_item(item_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM itinerary_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0

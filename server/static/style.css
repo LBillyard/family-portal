@@ -2244,6 +2244,55 @@ dialog select:focus {
   letter-spacing: -0.03em;
 }
 
+/* Per-trip day-by-day itinerary (expandable under each holiday card) */
+.itinerary-wrap {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+}
+.itin-head { margin-bottom: 10px; }
+.itin-empty { margin: 4px 0; }
+.itin-day { margin-bottom: 14px; }
+.itin-day:last-child { margin-bottom: 0; }
+.itin-day-head {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.itin-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+.itin-row {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.itin-row.editing { background: var(--surface-raised); }
+.itin-main { display: flex; align-items: flex-start; gap: 8px; }
+.itin-emoji { font-size: 1rem; line-height: 1.4; flex-shrink: 0; }
+.itin-detail { min-width: 0; flex: 1; }
+.itin-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.itin-time {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.itin-title { font-size: 0.875rem; font-weight: 600; color: var(--navy-900); }
+.itin-loc { font-size: 0.8125rem; color: var(--text-muted); }
+.itin-loc::before { content: '· '; }
+.itin-notes { font-size: 0.8125rem; color: var(--text-muted); margin-top: 2px; }
+.itin-add-slot:empty { display: none; }
+.itin-add-slot .row-edit { margin-top: 10px; }
+
 .status-tag {
   display: inline-block;
   padding: 3px 10px;

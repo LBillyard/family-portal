@@ -2742,9 +2742,13 @@ function renderHolidays(data, filter = tripFilter) {
           ${bookings ? `<div class="booking-links">${bookings}</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             <button class="btn btn-sm btn-primary wf-action" data-action="view-trip" data-trip-id="${t.id}">Details</button>
+            <button class="btn btn-sm btn-soft wf-action" data-action="toggle-itinerary" data-trip-id="${t.id}" id="itin-toggle-${t.id}">🗓️ Itinerary</button>
             <button class="btn btn-sm btn-soft wf-action" data-action="add-packing" data-trip-id="${t.id}">Packing</button>
             <button class="btn btn-sm btn-soft wf-action" data-tab-link="media" data-media-trip="${t.id}">Photos</button>
             <button class="btn btn-sm btn-outline wf-action" data-action="edit-trip" data-trip-id="${t.id}">Edit</button>
+          </div>
+          <div class="itinerary-wrap" id="itin-wrap-${t.id}" hidden>
+            <div class="itinerary-body" id="itin-body-${t.id}"></div>
           </div>
         </div>
       </article>`;
@@ -2767,6 +2771,144 @@ function renderHolidays(data, filter = tripFilter) {
     </article>`
     )
     .join('') || '<p class="hint-small">No ideas yet — describe a trip in the AI box above to generate some.</p>';
+}
+
+// --- Per-trip day-by-day itinerary (Holidays tab) ---
+// Items come from GET /api/itinerary?trip_id= (already ordered: dated+timed
+// first, undated last). We cache them per trip on store.itineraries so an
+// add/edit/delete only reloads that one trip's timeline, not the whole tab.
+const ITINERARY_KINDS = [
+  ['flight', '✈️ Flight'],
+  ['hotel', '🏨 Hotel'],
+  ['activity', '🎡 Activity'],
+  ['food', '🍽️ Food'],
+  ['transport', '🚗 Transport'],
+  ['other', '📋 Other'],
+];
+const ITINERARY_EMOJI = { flight: '✈️', hotel: '🏨', activity: '🎡', food: '🍽️', transport: '🚗', other: '📋' };
+
+function findItin(tripId, id) {
+  return (store.itineraries?.[tripId] || []).find((x) => String(x.id) === String(id));
+}
+
+function itinKindSelect(selected) {
+  return ITINERARY_KINDS.map(([v, l]) => `<option value="${v}"${v === selected ? ' selected' : ''}>${l}</option>`).join('');
+}
+
+// Group items by day_date, preserving the backend's order. Dated groups get a
+// numbered "Day N — <date>" header; anything without a date collects under a
+// single trailing "Any time / unscheduled" group.
+function groupItinerary(items) {
+  const map = new Map();
+  items.forEach((it) => {
+    const key = it.day_date ? String(it.day_date).slice(0, 10) : '';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(it);
+  });
+  const groups = [];
+  let dayNum = 0;
+  for (const [key, its] of map) {
+    if (key) {
+      dayNum += 1;
+      groups.push({ label: `Day ${dayNum} — ${fmtShortDate(key, true)}`, items: its });
+    } else {
+      groups.push({ label: 'Any time / unscheduled', items: its });
+    }
+  }
+  return groups;
+}
+
+function itinRowInner(it) {
+  const emoji = ITINERARY_EMOJI[it.kind] || ITINERARY_EMOJI.other;
+  const time = it.start_time ? `<span class="itin-time">${esc(String(it.start_time).slice(0, 5))}</span>` : '';
+  const loc = it.location ? `<span class="itin-loc">${esc(it.location)}</span>` : '';
+  const notes = it.notes ? `<div class="itin-notes">${esc(it.notes)}</div>` : '';
+  return `
+    <div class="itin-main">
+      <span class="itin-emoji">${emoji}</span>
+      <div class="itin-detail">
+        <div class="itin-line">${time}<span class="itin-title">${esc(it.title)}</span>${loc}</div>
+        ${notes}
+      </div>
+      <button class="bill-edit-btn wf-action" data-action="edit-itinerary" data-trip-id="${esc(it.trip_id)}" data-itin-id="${esc(it.id)}" title="Edit item" aria-label="Edit itinerary item">✎</button>
+    </div>`;
+}
+
+// Shared field markup for the inline add + edit forms (both use .row-edit).
+function itinFieldsInner(it = {}) {
+  return `
+    <input type="text" class="te-input" data-f="title" value="${esc(it.title || '')}" placeholder="e.g. Flight to Barcelona">
+    <div class="row-edit-fields">
+      <label>Type<select data-f="kind">${itinKindSelect(it.kind || 'activity')}</select></label>
+      <label>Day<input type="date" data-f="day_date" value="${esc((it.day_date || '').slice(0, 10))}"></label>
+      <label>Time<input type="time" data-f="start_time" value="${esc((it.start_time || '').slice(0, 5))}"></label>
+      <label>Location<input type="text" data-f="location" value="${esc(it.location || '')}" placeholder="Optional"></label>
+      <label class="row-edit-full">Notes<input type="text" data-f="notes" value="${esc(it.notes || '')}" placeholder="Optional"></label>
+    </div>`;
+}
+
+function itinEditInner(it) {
+  return `
+    <div class="row-edit" data-itin-id="${esc(it.id)}">
+      ${itinFieldsInner(it)}
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-itinerary-inline" data-trip-id="${esc(it.trip_id)}" data-itin-id="${esc(it.id)}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-itinerary-inline" data-trip-id="${esc(it.trip_id)}" data-itin-id="${esc(it.id)}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-itinerary" data-trip-id="${esc(it.trip_id)}" data-itin-id="${esc(it.id)}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function itinAddInner(tripId) {
+  return `
+    <div class="row-edit itin-add-form" data-trip-id="${esc(tripId)}">
+      ${itinFieldsInner()}
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-itinerary-new" data-trip-id="${esc(tripId)}">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-itinerary-add">Cancel</button>
+      </div>
+    </div>`;
+}
+
+// Paint the cached itinerary for one trip into its expanded body. Also keeps
+// the toggle label in sync with the item count.
+function renderItinerary(tripId) {
+  const body = document.getElementById(`itin-body-${tripId}`);
+  if (!body) return;
+  const items = store.itineraries?.[tripId] || [];
+  const groupsHtml = groupItinerary(items)
+    .map((g) => `
+      <div class="itin-day">
+        <div class="itin-day-head">${esc(g.label)}</div>
+        <div class="itin-rows">
+          ${g.items.map((it) => `<div class="itin-row" data-itin-id="${esc(it.id)}">${itinRowInner(it)}</div>`).join('')}
+        </div>
+      </div>`)
+    .join('');
+  body.innerHTML = `
+    <div class="itin-head">
+      <button type="button" class="btn btn-sm btn-soft wf-action" data-action="add-itinerary" data-trip-id="${esc(tripId)}">+ Add itinerary item</button>
+    </div>
+    ${items.length ? groupsHtml : '<p class="hint-small itin-empty">No plans yet — add flights, hotels and activities to build your day-by-day itinerary.</p>'}
+    <div class="itin-add-slot"></div>`;
+  const toggle = document.getElementById(`itin-toggle-${tripId}`);
+  if (toggle) toggle.textContent = `🗓️ Itinerary (${items.length})`;
+}
+
+async function loadItinerary(tripId) {
+  const body = document.getElementById(`itin-body-${tripId}`);
+  const wrap = document.getElementById(`itin-wrap-${tripId}`);
+  if (body && !body.innerHTML) body.innerHTML = '<p class="hint-small">Loading itinerary…</p>';
+  try {
+    const data = await api(`/itinerary?trip_id=${encodeURIComponent(tripId)}`);
+    if (!store.itineraries) store.itineraries = {};
+    store.itineraries[tripId] = data.items || [];
+    if (wrap) wrap.dataset.loaded = '1';
+    renderItinerary(tripId);
+  } catch (err) {
+    if (body) body.innerHTML = '<p class="hint-small">Couldn\'t load itinerary.</p>';
+    showToast(err.message, true);
+  }
 }
 
 function docStatusLabel(status) {
@@ -4841,6 +4983,92 @@ function initActions() {
       }
       return;
     }
+
+    // --- Holidays: per-trip day-by-day itinerary ---
+    if (action === 'toggle-itinerary') {
+      const tripId = btn.dataset.tripId;
+      const wrap = document.getElementById(`itin-wrap-${tripId}`);
+      if (!wrap) return;
+      const opening = wrap.hidden;
+      wrap.hidden = !wrap.hidden;
+      btn.classList.toggle('open', opening);
+      if (opening && !wrap.dataset.loaded) loadItinerary(tripId);
+      return;
+    }
+    if (action === 'add-itinerary') {
+      const tripId = btn.dataset.tripId;
+      const body = document.getElementById(`itin-body-${tripId}`);
+      const slot = body?.querySelector('.itin-add-slot');
+      if (slot && !slot.querySelector('.itin-add-form')) {
+        slot.innerHTML = itinAddInner(tripId);
+        slot.querySelector('[data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'cancel-itinerary-add') {
+      btn.closest('.itin-add-form')?.remove();
+      return;
+    }
+    if (action === 'save-itinerary-new') {
+      const form = btn.closest('.itin-add-form');
+      const f = readInlineFields(form);
+      if (!f.title || !f.title.trim()) { showToast('Itinerary item needs a title', true); return; }
+      const tripId = btn.dataset.tripId;
+      btn.disabled = true;
+      api('/itinerary', {
+        method: 'POST',
+        body: JSON.stringify({
+          trip_id: tripId,
+          title: f.title.trim(),
+          kind: f.kind || 'other',
+          day_date: f.day_date || null,
+          start_time: f.start_time || null,
+          location: (f.location || '').trim() || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadItinerary(tripId)).then(() => showToast('Itinerary item added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-itinerary') {
+      const row = btn.closest('.itin-row');
+      const it = findItin(btn.dataset.tripId, btn.dataset.itinId);
+      if (row && it) { row.classList.add('editing'); row.innerHTML = itinEditInner(it); row.querySelector('[data-f="title"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-itinerary-inline') {
+      const f = readInlineFields(btn.closest('.row-edit'));
+      if (!f.title || !f.title.trim()) { showToast('Itinerary item needs a title', true); return; }
+      const tripId = btn.dataset.tripId;
+      api(`/itinerary/${btn.dataset.itinId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: f.title.trim(),
+          kind: f.kind,
+          day_date: f.day_date || null,
+          start_time: f.start_time || null,
+          location: (f.location || '').trim() || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadItinerary(tripId)).then(() => showToast('Itinerary updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-itinerary-inline') {
+      const row = btn.closest('.itin-row');
+      const it = findItin(btn.dataset.tripId, btn.dataset.itinId);
+      if (row && it) { row.classList.remove('editing'); row.innerHTML = itinRowInner(it); }
+      return;
+    }
+    if (action === 'delete-itinerary') {
+      if (!confirm('Delete this itinerary item?')) return;
+      const tripId = btn.dataset.tripId;
+      api(`/itinerary/${btn.dataset.itinId}`, { method: 'DELETE' })
+        .then(() => loadItinerary(tripId)).then(() => showToast('Itinerary item deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+
     if (action === 'maintenance-done') {
       const maintId = btn.dataset.maintId;
       if (maintId) {

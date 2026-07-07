@@ -52,6 +52,8 @@ from shared.schemas import (
     HolidayIdeaRequest,
     InventoryCreate,
     InventoryUpdate,
+    ItineraryCreate,
+    ItineraryUpdate,
     LoginRequest,
     MaintenanceCreate,
     MaintenanceUpdate,
@@ -1296,6 +1298,40 @@ def link_trip_doc(trip_id: str, doc_id: str, user: dict = Depends(require_user))
 def unlink_trip_doc(trip_id: str, doc_id: str, user: dict = Depends(require_user)):
     db.unlink_trip_document(trip_id, doc_id)
     return {"ok": True}
+
+
+# --- Trip itinerary (day-by-day entries for a holiday) ---
+
+@router.get("/itinerary")
+def api_itinerary(trip_id: str = "", user: dict = Depends(require_user)):
+    if not (trip_id or "").strip():
+        raise HTTPException(status_code=400, detail="trip_id is required")
+    return {"items": db.list_itinerary(trip_id)}
+
+
+@router.post("/itinerary")
+def create_itinerary_route(body: ItineraryCreate, user: dict = Depends(require_user)):
+    if not db.get_trip_detail(body.trip_id):
+        raise HTTPException(status_code=400, detail="Invalid trip")
+    if not (body.title or "").strip():
+        raise HTTPException(status_code=400, detail="Itinerary title is required")
+    return {"item": db.create_itinerary_item(body.model_dump())}
+
+
+@router.patch("/itinerary/{item_id}")
+def update_itinerary_route(item_id: str, body: ItineraryUpdate, user: dict = Depends(require_user)):
+    item = db.update_itinerary_item(item_id, body.model_dump(exclude_unset=True))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Itinerary item not found")
+    return {"item": item}
+
+
+@router.delete("/itinerary/{item_id}")
+def delete_itinerary_route(item_id: str, user: dict = Depends(require_user)):
+    ok = db.delete_itinerary_item(item_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Itinerary item not found")
+    return {"ok": ok}
 
 
 @router.post("/finances/scan-receipt")

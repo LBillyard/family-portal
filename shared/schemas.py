@@ -507,3 +507,22 @@ class VehicleUpdate(BaseModel):
     service_due: Optional[str] = None
     notes: Optional[str] = None
 
+
+class ItineraryCreate(BaseModel):
+    trip_id: str
+    title: str
+    kind: str = "activity"
+    day_date: Optional[str] = None
+    start_time: Optional[str] = None
+    location: Optional[str] = None
+    notes: Optional[str] = ""
+
+
+class ItineraryUpdate(BaseModel):
+    title: Optional[str] = None
+    kind: Optional[str] = None
+    day_date: Optional[str] = None
+    start_time: Optional[str] = None
+    location: Optional[str] = None
+    notes: Optional[str] = None
+
