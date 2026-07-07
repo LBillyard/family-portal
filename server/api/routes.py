@@ -23,6 +23,7 @@ from server.services import finance_merge, notifications as notify_svc, receipts
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
 from server.services import weather as weather_svc, gmail_receipts, push as push_svc
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
+from server.services import snap_sort
 from server.services import insights, networth, occasions, vehicles as vehicles_svc
 from server.services import cashflow
 from server.services import export_data
@@ -353,46 +354,54 @@ async def _handle_whatsapp_message(msg: dict) -> None:
             logger.exception("Failed to send WhatsApp voice reply to %s", frm)
         return
 
-    # --- Ingest any attached photos/videos into the family media library ---
-    added = 0
+    # --- Ingest any attached photos/videos (Wave 17: snap-and-sort) ---
+    # Each IMAGE is auto-routed when snap-sort is on: a receipt becomes an expense
+    # (plus a copy in the Vault), a document is filed to the Vault, everything else
+    # lands in the photo gallery. Videos — and anything at all when snap-sort is off
+    # — go straight to the gallery exactly as before. We download each media item
+    # ONCE and pass the bytes to snap_sort (it never fetches URLs itself). Every step
+    # is guarded so one bad item can't break the rest, and a photo is never lost.
     if media:
+        try:
+            snap_enabled = db.get_notification_prefs().get("snap_sort_enabled", True)
+        except Exception:
+            logger.exception("Failed to read snap_sort pref — defaulting on")
+            snap_enabled = True
+        summaries: list[str] = []
         for m in media:
+            ct = m.get("content_type") or ""
+            if ct.startswith("audio/"):
+                continue  # voice notes are handled above
             url = m.get("url")
-            ext = media_files.ext_for_content_type(m.get("content_type"))
-            if not url or not ext:
+            if not url or not media_files.ext_for_content_type(ct):
                 continue
             try:
-                data_bytes, _ct = await whatsapp_twilio.download_media(url)
+                data_bytes, dl_ct = await whatsapp_twilio.download_media(url)
             except Exception:
                 logger.exception("WhatsApp media download failed for %s", frm)
                 continue  # one bad download must not break the rest
-            is_video = ext in media_files.VIDEO_EXTENSIONS
-            cap = media_files.VIDEO_MAX_BYTES if is_video else media_files.PHOTO_MAX_BYTES
-            if len(data_bytes) > cap:
-                logger.warning("WhatsApp media too large (%d bytes) — skipping", len(data_bytes))
-                continue
+            ct = dl_ct or ct
             try:
-                media_files.ensure_media_dir()
-                mid = __import__("uuid").uuid4().hex[:12]
-                stored = f"{mid}_whatsapp{ext}"
-                (media_files.MEDIA_DIR / stored).write_bytes(data_bytes)
-                db.create_media({
-                    "id": mid,
-                    "title": f"WhatsApp {'video' if is_video else 'photo'}",
-                    "media_type": media_files.media_type_for_ext(ext),
-                    "file_name": stored,
-                    "file_path": stored,
-                    "mime_type": m.get("content_type"),
-                    "file_size": len(data_bytes),
-                    "user_id": user["id"],
-                    "source": "whatsapp",
-                })
-                added += 1
+                if ct.startswith("image/") and snap_enabled:
+                    result = await snap_sort.handle_image(data_bytes, ct, user)
+                    summaries.append(result.get("summary") or snap_sort.PHOTO_SUMMARY)
+                else:
+                    # Video, snap-sort disabled, or a non-image — save to the gallery.
+                    if media_files.save_inbound_media(data_bytes, ct, user):
+                        summaries.append(snap_sort.PHOTO_SUMMARY)
             except Exception:
-                logger.exception("Saving WhatsApp media failed for %s", frm)
-        if added:
+                logger.exception("Handling WhatsApp media failed for %s", frm)
+        if summaries:
+            # Keep every receipt/document action line, and collapse the plain
+            # gallery saves into a single count line (so a mixed batch still reports
+            # "🧾 Logged … " + "📸 Added 2 to your photos.").
+            photo_n = sum(1 for s in summaries if s == snap_sort.PHOTO_SUMMARY)
+            lines = [s for s in summaries if s != snap_sort.PHOTO_SUMMARY]
+            if photo_n:
+                lines.append(f"📸 Added {photo_n} to your photos.")
+            reply_text = "\n".join(lines)
             try:
-                await whatsapp_svc.send_text(frm, f"📸 Added {added} to your photos.")
+                await whatsapp_svc.send_text(frm, reply_text)
             except Exception:
                 logger.exception("Failed to send WhatsApp media reply to %s", frm)
 

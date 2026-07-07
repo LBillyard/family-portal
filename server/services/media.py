@@ -1,9 +1,15 @@
 """Family photos and videos — storage helpers."""
 
+import logging
 import os
 import re
 import shutil
+import uuid
 from pathlib import Path
+
+from server import database as db
+
+logger = logging.getLogger(__name__)
 
 MEDIA_DIR = Path(__file__).parent.parent.parent / "data" / "uploads" / "media"
 PHOTO_MAX_BYTES = 40 * 1024 * 1024
@@ -75,6 +81,46 @@ def validate_upload(filename: str, size: int) -> tuple[str, str]:
 
 def mime_for_path(path: Path) -> str:
     return MIME_BY_EXT.get(path.suffix.lower(), "application/octet-stream")
+
+
+def save_inbound_media(image_bytes: bytes, content_type: str, user: dict, source: str = "whatsapp") -> dict | None:
+    """Save already-downloaded inbound media bytes into the family gallery.
+
+    This is the ONE place bytes hit the gallery (used by the WhatsApp webhook and
+    by snap-and-sort's fallback path). Best-effort: it NEVER raises — on an unknown
+    content-type, an over-cap file, or any write/DB failure it logs and returns
+    None so a photo is never lost to an exception. Returns the created media row on
+    success, else None."""
+    ext = ext_for_content_type(content_type)
+    if not ext:
+        logger.warning("save_inbound_media: unknown content-type %r — skipping", content_type)
+        return None
+    is_video = ext in VIDEO_EXTENSIONS
+    cap = VIDEO_MAX_BYTES if is_video else PHOTO_MAX_BYTES
+    if len(image_bytes) > cap:
+        logger.warning("save_inbound_media: media too large (%d bytes) — skipping", len(image_bytes))
+        return None
+    try:
+        ensure_media_dir()
+        mid = uuid.uuid4().hex[:12]
+        stored = f"{mid}_{source}{ext}"
+        (MEDIA_DIR / stored).write_bytes(image_bytes)
+        label = "video" if is_video else "photo"
+        title = f"WhatsApp {label}" if source == "whatsapp" else f"{source} {label}"
+        return db.create_media({
+            "id": mid,
+            "title": title,
+            "media_type": media_type_for_ext(ext),
+            "file_name": stored,
+            "file_path": stored,
+            "mime_type": (content_type or "").split(";")[0].strip() or None,
+            "file_size": len(image_bytes),
+            "user_id": user["id"],
+            "source": source,
+        })
+    except Exception:
+        logger.exception("save_inbound_media: failed to store media")
+        return None
 
 
 async def stream_upload_to_disk(upload_file, dest_path: Path, max_bytes: int) -> int:

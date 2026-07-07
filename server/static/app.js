@@ -4318,6 +4318,10 @@ function renderSettings(data) {
         .join('')}
       <button class="btn btn-sm btn-primary wf-action" data-action="whatsapp-test" style="margin-top:10px" ${integrations.whatsapp ? '' : 'disabled title="Configure WhatsApp in .env first"'}>Send me a test digest</button>
       <div id="voice-notes-status" class="voice-notes-line" hidden></div>
+      <label class="notif-pref-row snap-sort-row" id="snap-sort-row" hidden>
+        <span class="notif-pref-text"><strong>Auto-sort photos sent to WhatsApp</strong><small>Receipts become expenses, documents go to your Vault, everything else to Photos.</small></span>
+        <input type="checkbox" class="notif-pref-toggle" id="snap-sort-toggle">
+      </label>
     </div>
     <div class="settings-section">
       <h3>Weather</h3>
@@ -4444,6 +4448,37 @@ async function loadVoiceStatus() {
   } catch {
     el.hidden = true;
     el.textContent = '';
+  }
+}
+
+// Snap-and-sort: a toggle in the WhatsApp assistant settings bound to the
+// snap_sort_enabled notification pref. Kept self-contained (its own load/PATCH)
+// so it doesn't depend on the notif-prefs card rendering. Hides gracefully when
+// the pref is unavailable (older backend). PATCHes the same prefs endpoint.
+async function loadSnapSortStatus() {
+  const row = document.getElementById('snap-sort-row');
+  const toggle = document.getElementById('snap-sort-toggle');
+  if (!row || !toggle) return;
+  try {
+    const prefs = await api('/notifications/prefs');
+    if (!prefs || typeof prefs.snap_sort_enabled === 'undefined') {
+      row.hidden = true;
+      return;
+    }
+    toggle.checked = !!prefs.snap_sort_enabled;
+    row.hidden = false;
+    toggle.onchange = async () => {
+      const value = toggle.checked;
+      try {
+        await api('/notifications/prefs', { method: 'PATCH', body: JSON.stringify({ snap_sort_enabled: value }) });
+        showToast('Saved');
+      } catch (err) {
+        toggle.checked = !value; // revert on failure
+        showToast(err.message, true);
+      }
+    };
+  } catch {
+    row.hidden = true;
   }
 }
 
@@ -7607,7 +7642,7 @@ async function load() {
   if (subscriptions) renderSubscriptions(subscriptions);
   if (documents) renderDocuments(documents);
   if (memory) renderMemory(memory);
-  if (settings) { renderSettings(settings); loadNotificationPrefs(); refreshPushUI(); loadVoiceStatus(); }
+  if (settings) { renderSettings(settings); loadNotificationPrefs(); refreshPushUI(); loadVoiceStatus(); loadSnapSortStatus(); }
 
   failed.forEach(markSectionFailed);
   if (failed.length) console.error('Failed to load:', failed.join(', '));

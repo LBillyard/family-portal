@@ -4841,6 +4841,15 @@ dialog select:focus {
   text-align: center;
 }
 
+/* Snap-and-sort toggle sits on its own inside the WhatsApp assistant card,
+   so it gets a top separator instead of the notif-list bottom border. */
+.snap-sort-row {
+  margin-top: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+  border-bottom: none;
+}
+
 /* Document expiry badge */
 .expiry-badge {
   display: inline-block;

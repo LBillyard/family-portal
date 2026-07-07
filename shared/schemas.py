@@ -297,6 +297,7 @@ class NotificationPrefsUpdate(BaseModel):
     weekly_finance_summary: Optional[bool] = None
     budget_alerts: Optional[bool] = None
     proactive_inbox: Optional[bool] = None
+    snap_sort_enabled: Optional[bool] = None
 
 
 class TradespersonCreate(BaseModel):

@@ -299,6 +299,7 @@ def init_db() -> None:
                 weekly_finance_summary INTEGER NOT NULL DEFAULT 1,
                 budget_alerts INTEGER NOT NULL DEFAULT 1,
                 proactive_inbox INTEGER NOT NULL DEFAULT 1,
+                snap_sort_enabled INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT
             );
 
@@ -740,6 +741,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN budget_alerts INTEGER NOT NULL DEFAULT 1")
     if "proactive_inbox" not in pcols:
         conn.execute("ALTER TABLE notification_prefs ADD COLUMN proactive_inbox INTEGER NOT NULL DEFAULT 1")
+    if "snap_sort_enabled" not in pcols:
+        conn.execute("ALTER TABLE notification_prefs ADD COLUMN snap_sort_enabled INTEGER NOT NULL DEFAULT 1")
 
     conn.execute(
         """CREATE TABLE IF NOT EXISTS suggestions (
@@ -2974,6 +2977,7 @@ _PREFS_BOOL_FIELDS = (
     "weekly_finance_summary",
     "budget_alerts",
     "proactive_inbox",
+    "snap_sort_enabled",
 )
 
 
