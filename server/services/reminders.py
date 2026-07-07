@@ -261,4 +261,42 @@ async def run_reminders() -> dict:
             _push("Chore due", body, badge=alerts)
             db.mark_notified(key)
 
+    # --- Occasions: a 7-day heads-up so there's time to buy a gift/card. Gated only
+    #     by the master switch (checked at the top), not a per-category pref. ---
+    from server.services import occasions as occasions_svc
+    for occ in occasions_svc.upcoming_occasions(within_days=7, today=today):
+        checked += 1
+        nd = occ.get("next_date")
+        key = f"occasion:{occ['id']}:{(nd or '')[:4]}"   # once per year
+        if db.was_notified(key):
+            continue
+        du = occ.get("days_until")
+        when = "today! 🎉" if du == 0 else f"in {du} day{'s' if du != 1 else ''}"
+        extra = f" (turns {occ['years']})" if occ.get("kind") == "birthday" and occ.get("years") else ""
+        body = f"🎂 {occ['title']}{extra} {when}"
+        if await _remind_household(_household(), body):
+            sent += len(_household())
+            alerts += 1
+            _push("Upcoming occasion", body, badge=alerts)
+            db.mark_notified(key)
+
+    # --- Warranty expiries: gate under the household's expiry-radar toggle. ---
+    if prefs.get("document_expiry_reminders"):
+        for it in db.inventory_expiring_within(lead):
+            checked += 1
+            key = f"warranty:{it['id']}:{it.get('warranty_expiry')}"
+            if db.was_notified(key):
+                continue
+            we = it.get("warranty_expiry")
+            try:
+                when = _fmt_date(date.fromisoformat(str(we)[:10]))
+            except (TypeError, ValueError):
+                when = "soon"
+            body = f"📦 Warranty ending: {it['name']} on {when}"
+            if await _remind_household(_household(), body):
+                sent += len(_household())
+                alerts += 1
+                _push("Warranty ending", body, badge=alerts)
+                db.mark_notified(key)
+
     return {"sent": sent, "checked": checked}

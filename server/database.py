@@ -380,6 +380,34 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Birthdays / anniversaries that recur annually on their month/day.
+            CREATE TABLE IF NOT EXISTS occasions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'birthday',
+                date TEXT NOT NULL,
+                person TEXT,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            -- Home inventory / warranty tracker.
+            CREATE TABLE IF NOT EXISTS inventory_items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'other',
+                brand TEXT,
+                model TEXT,
+                serial TEXT,
+                purchase_date TEXT,
+                price REAL,
+                warranty_expiry TEXT,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         _migrate(conn)
         row = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
@@ -3301,3 +3329,217 @@ def delete_chore(chore_id: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM chores WHERE id = ?", (chore_id,))
         return cur.rowcount > 0
+
+
+# --- Occasions (birthdays / anniversaries, annually recurring) ---
+
+def _occasion_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "title": r["title"],
+        "kind": r["kind"],
+        "date": r["date"],
+        "person": r.get("person"),
+        "notes": r["notes"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_occasions() -> list[dict]:
+    """All occasions, ordered by month-day (substr past the year) so they read in
+    calendar order regardless of the original year stored in `date`."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM occasions ORDER BY substr(date, 6), title"
+        ).fetchall()
+        return [_occasion_out(row_to_dict(r)) for r in rows]
+
+
+def get_occasion(occasion_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM occasions WHERE id = ?", (occasion_id,)).fetchone()
+        return _occasion_out(row_to_dict(row)) if row else None
+
+
+def create_occasion(data: dict) -> dict:
+    oid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO occasions (id, title, kind, date, person, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                oid,
+                data["title"].strip(),
+                data.get("kind") or "birthday",
+                data["date"],
+                data.get("person"),
+                data.get("notes") or "",
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM occasions WHERE id = ?", (oid,)).fetchone()
+        return _occasion_out(row_to_dict(row))
+
+
+def update_occasion(occasion_id: str, data: dict) -> Optional[dict]:
+    """Partial update. `person` and `notes` use presence (`key in data`) rather
+    than truthiness so they can be cleared; `notes` coerces None to '' to honour
+    its NOT NULL constraint."""
+    fields, values = [], []
+    if data.get("title") is not None:
+        fields.append("title = ?")
+        values.append(data["title"].strip())
+    if data.get("kind") is not None:
+        fields.append("kind = ?")
+        values.append(data["kind"])
+    if data.get("date") is not None:
+        fields.append("date = ?")
+        values.append(data["date"])
+    if "person" in data:
+        fields.append("person = ?")
+        values.append(data["person"])
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"] if data["notes"] is not None else "")
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM occasions WHERE id = ?", (occasion_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(occasion_id)
+            conn.execute(f"UPDATE occasions SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM occasions WHERE id = ?", (occasion_id,)).fetchone()
+        return _occasion_out(row_to_dict(row))
+
+
+def delete_occasion(occasion_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM occasions WHERE id = ?", (occasion_id,))
+        return cur.rowcount > 0
+
+
+# --- Inventory items (home inventory / warranty tracker) ---
+
+def _inventory_out(r: dict) -> dict:
+    price = r.get("price")
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "category": r["category"],
+        "brand": r.get("brand"),
+        "model": r.get("model"),
+        "serial": r.get("serial"),
+        "purchase_date": r.get("purchase_date"),
+        "price": float(price) if price is not None else None,
+        "warranty_expiry": r.get("warranty_expiry"),
+        "notes": r["notes"],
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_inventory() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM inventory_items ORDER BY name").fetchall()
+        return [_inventory_out(row_to_dict(r)) for r in rows]
+
+
+def get_inventory_item(item_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM inventory_items WHERE id = ?", (item_id,)).fetchone()
+        return _inventory_out(row_to_dict(row)) if row else None
+
+
+def create_inventory_item(data: dict) -> dict:
+    iid = _new_id()
+    now = _utcnow()
+    price = data.get("price")
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO inventory_items
+                   (id, name, category, brand, model, serial, purchase_date, price, warranty_expiry, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                iid,
+                data["name"].strip(),
+                data.get("category") or "other",
+                data.get("brand"),
+                data.get("model"),
+                data.get("serial"),
+                data.get("purchase_date"),
+                float(price) if price is not None else None,
+                data.get("warranty_expiry"),
+                data.get("notes") or "",
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM inventory_items WHERE id = ?", (iid,)).fetchone()
+        return _inventory_out(row_to_dict(row))
+
+
+def update_inventory_item(item_id: str, data: dict) -> Optional[dict]:
+    """Partial update. The nullable fields (brand/model/serial/purchase_date/
+    warranty_expiry/price) use presence (`key in data`) so they can be cleared to
+    NULL; `notes` coerces None to '' to honour its NOT NULL constraint."""
+    fields, values = [], []
+    if data.get("name") is not None:
+        fields.append("name = ?")
+        values.append(data["name"].strip())
+    if data.get("category") is not None:
+        fields.append("category = ?")
+        values.append(data["category"])
+    for key in ("brand", "model", "serial", "purchase_date", "warranty_expiry"):
+        if key in data:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if "price" in data:
+        fields.append("price = ?")
+        values.append(float(data["price"]) if data["price"] is not None else None)
+    if "notes" in data:
+        fields.append("notes = ?")
+        values.append(data["notes"] if data["notes"] is not None else "")
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM inventory_items WHERE id = ?", (item_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(item_id)
+            conn.execute(f"UPDATE inventory_items SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM inventory_items WHERE id = ?", (item_id,)).fetchone()
+        return _inventory_out(row_to_dict(row))
+
+
+def delete_inventory_item(item_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM inventory_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0
+
+
+def inventory_expiring_within(days: int) -> list[dict]:
+    """Inventory items whose warranty_expiry falls within `days` from today.
+    Mirrors documents_expiring_within: includes ones that lapsed at most 1 day
+    ago (a small grace window) but nothing older, so a reminder can still fire
+    the day a warranty expires."""
+    today = date.today()
+    horizon = today + timedelta(days=days)
+    floor = today - timedelta(days=1)
+    out: list[dict] = []
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM inventory_items WHERE warranty_expiry IS NOT NULL AND warranty_expiry != '' ORDER BY warranty_expiry, name"
+        ).fetchall()
+        for r in rows:
+            d = row_to_dict(r)
+            try:
+                exp = date.fromisoformat(str(d["warranty_expiry"])[:10])
+            except (TypeError, ValueError):
+                continue
+            if floor <= exp <= horizon:
+                out.append(_inventory_out(d))
+    return out

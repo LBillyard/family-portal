@@ -23,7 +23,7 @@ from server.services import finance_merge, notifications as notify_svc, receipts
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
 from server.services import weather as weather_svc, gmail_receipts, push as push_svc
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
-from server.services import insights, networth
+from server.services import insights, networth, occasions
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
@@ -46,6 +46,8 @@ from shared.schemas import (
     EventCreate,
     EventUpdate,
     HolidayIdeaRequest,
+    InventoryCreate,
+    InventoryUpdate,
     LoginRequest,
     MaintenanceCreate,
     MaintenanceUpdate,
@@ -56,6 +58,8 @@ from shared.schemas import (
     MemoryImport,
     MemoryUpdate,
     NotificationPrefsUpdate,
+    OccasionCreate,
+    OccasionUpdate,
     InboxImport,
     PushSubscribe,
     SavingsGoalCreate,
@@ -1769,3 +1773,61 @@ def api_settings(_: dict = Depends(require_user)):
         },
         "notification_log": db.list_notification_log(10),
     }
+
+
+# --- Occasions (annual birthdays / anniversaries with countdowns) ---
+
+@router.get("/occasions")
+def api_occasions(_: dict = Depends(require_user)):
+    return {"occasions": occasions.upcoming_occasions()}
+
+
+@router.post("/occasions")
+def create_occasion_route(body: OccasionCreate, _: dict = Depends(require_user)):
+    if not (body.title or "").strip() or not (body.date or "").strip():
+        raise HTTPException(status_code=400, detail="Title and date are required")
+    return {"occasion": db.create_occasion(body.model_dump())}
+
+
+@router.patch("/occasions/{occasion_id}")
+def update_occasion_route(occasion_id: str, body: OccasionUpdate, _: dict = Depends(require_user)):
+    occasion = db.update_occasion(occasion_id, body.model_dump(exclude_unset=True))
+    if occasion is None:
+        raise HTTPException(status_code=404, detail="Occasion not found")
+    return {"occasion": occasion}
+
+
+@router.delete("/occasions/{occasion_id}")
+def delete_occasion_route(occasion_id: str, _: dict = Depends(require_user)):
+    if not db.delete_occasion(occasion_id):
+        raise HTTPException(status_code=404, detail="Occasion not found")
+    return {"ok": True}
+
+
+# --- Inventory (household items & warranties) ---
+
+@router.get("/inventory")
+def api_inventory(_: dict = Depends(require_user)):
+    return {"items": db.list_inventory()}
+
+
+@router.post("/inventory")
+def create_inventory_route(body: InventoryCreate, _: dict = Depends(require_user)):
+    if not (body.name or "").strip():
+        raise HTTPException(status_code=400, detail="Item name is required")
+    return {"item": db.create_inventory_item(body.model_dump())}
+
+
+@router.patch("/inventory/{item_id}")
+def update_inventory_route(item_id: str, body: InventoryUpdate, _: dict = Depends(require_user)):
+    item = db.update_inventory_item(item_id, body.model_dump(exclude_unset=True))
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    return {"item": item}
+
+
+@router.delete("/inventory/{item_id}")
+def delete_inventory_route(item_id: str, _: dict = Depends(require_user)):
+    if not db.delete_inventory_item(item_id):
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    return {"ok": True}

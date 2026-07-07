@@ -374,3 +374,43 @@ class ChoreUpdate(BaseModel):
     next_due: Optional[str] = None
     last_done: Optional[str] = None
 
+
+class OccasionCreate(BaseModel):
+    title: str
+    kind: str = "birthday"
+    date: str
+    person: Optional[str] = None
+    notes: Optional[str] = ""
+
+
+class OccasionUpdate(BaseModel):
+    title: Optional[str] = None
+    kind: Optional[str] = None
+    date: Optional[str] = None
+    person: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class InventoryCreate(BaseModel):
+    name: str
+    category: str = "other"
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    serial: Optional[str] = None
+    purchase_date: Optional[str] = None
+    price: Optional[float] = None
+    warranty_expiry: Optional[str] = None
+    notes: Optional[str] = ""
+
+
+class InventoryUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    serial: Optional[str] = None
+    purchase_date: Optional[str] = None
+    price: Optional[float] = None
+    warranty_expiry: Optional[str] = None
+    notes: Optional[str] = None
+

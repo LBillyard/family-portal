@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=41">
+  <link rel="stylesheet" href="/static/style.css?v=42">
   <script>
     // No-flash theme guard: set the theme attribute before first paint.
     // 'system' (or unset) leaves the attribute off so prefers-color-scheme wins.
@@ -163,6 +163,14 @@
               </div>
             </div>
             <div id="home-tasks"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Occasions</h3><p>Birthdays &amp; anniversaries — with countdowns</p></div>
+              <button class="card-link-btn wf-action" data-action="add-occasion">+ Add</button>
+            </div>
+            <div id="occasions-list"></div>
           </div>
 
           <div class="card">
@@ -464,6 +472,14 @@
           </div>
           <div id="chores-list" class="maintenance-list" style="margin-top:16px"></div>
         </div>
+
+        <div class="card" style="margin-top:28px">
+          <div class="card-header-row">
+            <div class="card-header"><h3>Home inventory</h3><p>Appliances, electronics and valuables — track warranties and keep records for insurance</p></div>
+            <button class="card-link-btn wf-action" data-action="add-inventory">+ Add item</button>
+          </div>
+          <div id="inventory-list" class="maintenance-list" style="margin-top:16px"></div>
+        </div>
       </section>
 
       <!-- APPOINTMENTS -->
@@ -731,6 +747,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=41"></script>
+  <script src="/static/app.js?v=42"></script>
 </body>
 </html>

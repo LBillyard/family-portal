@@ -2180,6 +2180,239 @@ function renderChores(chores) {
     : '<div class="vault-empty"><p>No chores yet</p><p class="hint-small">Add recurring jobs like bins, hoovering, or changing the bedding and they\'ll rotate between you.</p></div>';
 }
 
+// --- Home: Family occasions (birthdays & anniversaries) ---------------------
+// Own endpoint (/api/occasions), already sorted soonest-first with countdowns
+// computed server-side. We only format the countdown/next_date client-side.
+
+const OCCASION_KINDS = [['birthday', '🎂 Birthday'], ['anniversary', '💍 Anniversary'], ['other', '📅 Other']];
+const OCCASION_EMOJI = { birthday: '🎂', anniversary: '💍', other: '📅' };
+
+// Format a YYYY-MM-DD as "18 Sep" (or "18 Sep 2027" with year). Parsed as a
+// LOCAL date (not new Date(iso), which is UTC) to avoid an off-by-one shift.
+function fmtShortDate(iso, withYear = false) {
+  if (!iso) return '';
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return '';
+  const opts = withYear
+    ? { day: 'numeric', month: 'short', year: 'numeric' }
+    : { day: 'numeric', month: 'short' };
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', opts);
+}
+
+async function loadOccasions() {
+  const list = document.getElementById('occasions-list');
+  if (!list) return;
+  try {
+    const data = await api('/occasions');
+    store.occasions = data.occasions || [];
+    renderOccasions(store.occasions);
+  } catch {
+    list.innerHTML = '<div class="vault-empty"><p>Couldn\'t load occasions.</p></div>';
+  }
+}
+
+function findOccasion(id) {
+  return (store.occasions || []).find((o) => String(o.id) === String(id));
+}
+
+// Countdown label + highlight class from the server's days_until.
+function occasionCountdown(o) {
+  const d = o.days_until;
+  if (d == null) return { label: '', cls: '' };
+  if (d <= 0) return { label: 'Today! 🎉', cls: 'today' };
+  const label = d === 1 ? 'in 1 day' : `in ${d} days`;
+  return { label, cls: d <= 7 ? 'soon' : '' };
+}
+
+function occasionRowInner(o) {
+  const emoji = OCCASION_EMOJI[o.kind] || '📅';
+  const cd = occasionCountdown(o);
+  const meta = [];
+  if (o.person) meta.push(esc(o.person));
+  if (o.next_date) meta.push(fmtShortDate(o.next_date));
+  if (o.kind === 'birthday' && o.years > 0) meta.push(`turns ${o.years}`);
+  return `
+        <div class="occasion-main">
+          <div class="occasion-title"><span class="occasion-emoji">${emoji}</span>${esc(o.title)}</div>
+          <div class="subscription-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>
+          ${o.notes ? `<p class="hint-small">${esc(o.notes)}</p>` : ''}
+        </div>
+        <div class="occasion-side">
+          ${cd.label ? `<span class="occasion-countdown ${cd.cls}">${cd.label}</span>` : ''}
+          <button class="bill-edit-btn wf-action" data-action="edit-occasion" data-occasion-id="${o.id}" title="Edit occasion" aria-label="Edit occasion">✎</button>
+        </div>`;
+}
+
+function occasionEditInner(o) {
+  const kindOpts = OCCASION_KINDS.map(([v, l]) => `<option value="${v}"${v === o.kind ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" data-occasion-id="${o.id}">
+      <input type="text" class="te-input" data-f="title" value="${esc(o.title)}" placeholder="Title">
+      <div class="row-edit-fields">
+        <label>Type<select data-f="kind">${kindOpts}</select></label>
+        <label>Date (birth/wedding date)<input type="date" data-f="date" value="${esc((o.date || '').slice(0, 10))}"></label>
+        <label>Person<input type="text" data-f="person" value="${esc(o.person || '')}" placeholder="e.g. Mum"></label>
+        <label>Gift ideas / notes<input type="text" data-f="notes" value="${esc(o.notes || '')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-occasion-inline" data-occasion-id="${o.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-occasion-inline" data-occasion-id="${o.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-occasion" data-occasion-id="${o.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function occasionAddInner() {
+  const kindOpts = OCCASION_KINDS.map(([v, l]) => `<option value="${v}"${v === 'birthday' ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" id="occasion-add-form">
+      <input type="text" class="te-input" data-f="title" placeholder="Title (e.g. Mum's birthday)">
+      <div class="row-edit-fields">
+        <label>Type<select data-f="kind">${kindOpts}</select></label>
+        <label>Date (birth/wedding date)<input type="date" data-f="date"></label>
+        <label>Person<input type="text" data-f="person" placeholder="e.g. Mum"></label>
+        <label>Gift ideas / notes<input type="text" data-f="notes" placeholder="Optional"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-occasion-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="occasions-list">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderOccasions(list) {
+  const el = document.getElementById('occasions-list');
+  if (!el) return;
+  el.innerHTML = (list && list.length)
+    ? list.map((o) => `<div class="maintenance-row" data-occasion-id="${o.id}">${occasionRowInner(o)}</div>`).join('')
+    : '<div class="vault-empty"><p>No occasions yet</p><p class="hint-small">Add birthdays and anniversaries to get a countdown and a reminder a week before.</p></div>';
+}
+
+// --- Home care: Home inventory / warranty tracker ---------------------------
+// Own endpoint (/api/inventory). Warranty status is computed client-side from
+// warranty_expiry vs today so the pill stays live without a server round-trip.
+
+const INVENTORY_CATEGORIES = [['appliance', 'Appliance'], ['electronics', 'Electronics'], ['furniture', 'Furniture'], ['valuable', 'Valuable'], ['other', 'Other']];
+
+// Red (expired) / amber (ends within 30 days) / green (in warranty) pill.
+function warrantyPill(expiry) {
+  if (!expiry) return '';
+  const [y, m, d] = expiry.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return '';
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(y, m - 1, d);
+  const days = Math.round((exp - today) / 86400000);
+  const dateLabel = fmtShortDate(expiry, true);
+  if (days < 0) return '<span class="warranty-pill expired">Warranty expired</span>';
+  if (days <= 30) return `<span class="warranty-pill ending">Warranty ends ${dateLabel}</span>`;
+  return `<span class="warranty-pill active">In warranty (${dateLabel})</span>`;
+}
+
+async function loadInventory() {
+  const list = document.getElementById('inventory-list');
+  if (!list) return;
+  try {
+    const data = await api('/inventory');
+    store.inventory = data.items || [];
+    renderInventory(store.inventory);
+  } catch {
+    list.innerHTML = '<div class="vault-empty"><p>Couldn\'t load inventory.</p></div>';
+  }
+}
+
+function findInventory(id) {
+  return (store.inventory || []).find((it) => String(it.id) === String(id));
+}
+
+// Build a create/update payload from the inline row's fields (shared by add + edit).
+function inventoryPayload(f) {
+  const price = parseFloat(f.price);
+  return {
+    name: f.name.trim(),
+    category: f.category || 'other',
+    brand: (f.brand || '').trim() || null,
+    model: (f.model || '').trim() || null,
+    serial: (f.serial || '').trim() || null,
+    purchase_date: f.purchase_date || null,
+    price: Number.isFinite(price) ? price : null,
+    warranty_expiry: f.warranty_expiry || null,
+    notes: (f.notes || '').trim() || null,
+  };
+}
+
+function inventoryRowInner(it) {
+  const catLabel = (INVENTORY_CATEGORIES.find(([v]) => v === it.category) || [null, 'Other'])[1];
+  const meta = [];
+  const bm = [it.brand, it.model].filter(Boolean).join(' ');
+  if (bm) meta.push(esc(bm));
+  if (it.serial) meta.push(`SN ${esc(it.serial)}`);
+  if (it.price) meta.push(fmt.gbp(it.price));
+  return `
+        <div class="inventory-main">
+          <div class="inventory-title">${esc(it.name)}<span class="inv-cat-badge ${esc(it.category)}">${esc(catLabel)}</span></div>
+          <div class="subscription-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>
+          ${it.notes ? `<p class="hint-small">${esc(it.notes)}</p>` : ''}
+        </div>
+        <div class="inventory-side">
+          ${warrantyPill(it.warranty_expiry) || '<span class="warranty-pill none">—</span>'}
+          <button class="bill-edit-btn wf-action" data-action="edit-inventory" data-inv-id="${it.id}" title="Edit item" aria-label="Edit inventory item">✎</button>
+        </div>`;
+}
+
+function inventoryEditInner(it) {
+  const catOpts = INVENTORY_CATEGORIES.map(([v, l]) => `<option value="${v}"${v === it.category ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" data-inv-id="${it.id}">
+      <input type="text" class="te-input" data-f="name" value="${esc(it.name)}" placeholder="Name">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${catOpts}</select></label>
+        <label>Brand<input type="text" data-f="brand" value="${esc(it.brand || '')}"></label>
+        <label>Model<input type="text" data-f="model" value="${esc(it.model || '')}"></label>
+        <label>Serial<input type="text" data-f="serial" value="${esc(it.serial || '')}"></label>
+        <label>Purchased<input type="date" data-f="purchase_date" value="${esc((it.purchase_date || '').slice(0, 10))}"></label>
+        <label>Price £<input type="number" step="0.01" min="0" data-f="price" value="${it.price ?? ''}"></label>
+        <label>Warranty expiry<input type="date" data-f="warranty_expiry" value="${esc((it.warranty_expiry || '').slice(0, 10))}"></label>
+        <label>Notes<input type="text" data-f="notes" value="${esc(it.notes || '')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-inventory-inline" data-inv-id="${it.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-inventory-inline" data-inv-id="${it.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-inventory" data-inv-id="${it.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function inventoryAddInner() {
+  const catOpts = INVENTORY_CATEGORIES.map(([v, l]) => `<option value="${v}"${v === 'other' ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" id="inventory-add-form">
+      <input type="text" class="te-input" data-f="name" placeholder="Name (e.g. Samsung fridge)">
+      <div class="row-edit-fields">
+        <label>Category<select data-f="category">${catOpts}</select></label>
+        <label>Brand<input type="text" data-f="brand" placeholder="e.g. Samsung"></label>
+        <label>Model<input type="text" data-f="model" placeholder="e.g. RB38"></label>
+        <label>Serial<input type="text" data-f="serial"></label>
+        <label>Purchased<input type="date" data-f="purchase_date"></label>
+        <label>Price £<input type="number" step="0.01" min="0" data-f="price" placeholder="0"></label>
+        <label>Warranty expiry<input type="date" data-f="warranty_expiry"></label>
+        <label>Notes<input type="text" data-f="notes"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-inventory-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="inventory-list">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderInventory(items) {
+  const el = document.getElementById('inventory-list');
+  if (!el) return;
+  el.innerHTML = (items && items.length)
+    ? items.map((it) => `<div class="maintenance-row" data-inv-id="${it.id}">${inventoryRowInner(it)}</div>`).join('')
+    : '<div class="vault-empty"><p>No items yet</p><p class="hint-small">Add appliances, electronics and valuables to track warranties and keep records for insurance.</p></div>';
+}
+
 function renderAppointments(data, filter = 'all', category = 'all') {
   const { users, appointments } = data;
   let filtered = appointments.filter((a) => filter === 'all' || a.status === filter);
@@ -4558,6 +4791,122 @@ function initActions() {
       return;
     }
 
+    // --- Occasions (home card) -----------------------------------------------
+    if (action === 'add-occasion') {
+      const host = document.getElementById('occasions-list');
+      if (host && !document.getElementById('occasion-add-form')) {
+        host.insertAdjacentHTML('afterbegin', occasionAddInner());
+        document.querySelector('#occasion-add-form [data-f="title"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-occasion-new') {
+      const f = readInlineFields(document.getElementById('occasion-add-form'));
+      if (!f.title || !f.title.trim()) { showToast('Occasion needs a title', true); return; }
+      if (!f.date) { showToast('Pick a date', true); return; }
+      btn.disabled = true;
+      api('/occasions', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: f.title.trim(),
+          kind: f.kind || 'birthday',
+          date: f.date,
+          person: (f.person || '').trim() || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadOccasions()).then(() => showToast('Occasion added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-occasion') {
+      const row = btn.closest('.maintenance-row');
+      const o = findOccasion(btn.dataset.occasionId);
+      if (row && o) { row.classList.add('editing'); row.innerHTML = occasionEditInner(o); row.querySelector('[data-f="title"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-occasion-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.title || !f.title.trim()) { showToast('Occasion needs a title', true); return; }
+      if (!f.date) { showToast('Pick a date', true); return; }
+      api(`/occasions/${btn.dataset.occasionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: f.title.trim(),
+          kind: f.kind,
+          date: f.date,
+          person: (f.person || '').trim() || null,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadOccasions()).then(() => showToast('Occasion updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-occasion-inline') {
+      const row = btn.closest('.maintenance-row');
+      const o = findOccasion(btn.dataset.occasionId);
+      if (row && o) { row.classList.remove('editing'); row.innerHTML = occasionRowInner(o); }
+      return;
+    }
+    if (action === 'delete-occasion') {
+      if (!confirm('Delete this occasion?')) return;
+      api(`/occasions/${btn.dataset.occasionId}`, { method: 'DELETE' })
+        .then(() => loadOccasions()).then(() => showToast('Occasion deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+
+    // --- Home inventory (home care card) -------------------------------------
+    if (action === 'add-inventory') {
+      const host = document.getElementById('inventory-list');
+      if (host && !document.getElementById('inventory-add-form')) {
+        host.insertAdjacentHTML('afterbegin', inventoryAddInner());
+        document.querySelector('#inventory-add-form [data-f="name"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-inventory-new') {
+      const f = readInlineFields(document.getElementById('inventory-add-form'));
+      if (!f.name || !f.name.trim()) { showToast('Item needs a name', true); return; }
+      btn.disabled = true;
+      api('/inventory', {
+        method: 'POST',
+        body: JSON.stringify(inventoryPayload(f)),
+      }).then(() => loadInventory()).then(() => showToast('Item added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-inventory') {
+      const row = btn.closest('.maintenance-row');
+      const it = findInventory(btn.dataset.invId);
+      if (row && it) { row.classList.add('editing'); row.innerHTML = inventoryEditInner(it); row.querySelector('[data-f="name"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-inventory-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.name || !f.name.trim()) { showToast('Item needs a name', true); return; }
+      api(`/inventory/${btn.dataset.invId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(inventoryPayload(f)),
+      }).then(() => loadInventory()).then(() => showToast('Item updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-inventory-inline') {
+      const row = btn.closest('.maintenance-row');
+      const it = findInventory(btn.dataset.invId);
+      if (row && it) { row.classList.remove('editing'); row.innerHTML = inventoryRowInner(it); }
+      return;
+    }
+    if (action === 'delete-inventory') {
+      if (!confirm('Delete this item?')) return;
+      api(`/inventory/${btn.dataset.invId}`, { method: 'DELETE' })
+        .then(() => loadInventory()).then(() => showToast('Item deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+
     showToast(`“${action.replace(/-/g, ' ')}” isn’t available yet`);
   });
 
@@ -5305,6 +5654,7 @@ async function load() {
   }
   loadShopping();  // shared shopping list on the home card (own endpoint)
   loadMeals();     // weekly meal planner on the home card (own endpoint)
+  loadOccasions(); // Home → Occasions card: birthdays & anniversaries (own endpoint)
   if (briefing) renderBriefing(briefing);
   if (activity) renderActivityFeed(activity);
   if (calendar) renderCalendar(calendar);
@@ -5316,6 +5666,7 @@ async function load() {
   if (maintenance) renderMaintenance(maintenance);
   renderTradespeople(tradespeople || { tradespeople: [] });
   loadChores();     // Home care → Chores rotation card (own endpoint)
+  loadInventory();  // Home care → Home inventory / warranty card (own endpoint)
   if (appointments) renderAppointments(appointments);
   if (holidays) renderHolidays(holidays);
   if (media) renderMedia(media);
