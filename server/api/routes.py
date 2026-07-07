@@ -309,6 +309,48 @@ async def _handle_whatsapp_message(msg: dict) -> None:
         logger.warning("WhatsApp message from unlinked number %s — ignoring", frm)
         return
 
+    # --- Voice notes: transcribe, then run the assistant on the transcript ---
+    # Sits before the photo/video ingest so a voice-only message (media, no text)
+    # is handled here rather than falling through to the "nothing to do" return.
+    audio = next(
+        (m for m in media if (m.get("content_type") or "").startswith("audio/")),
+        None,
+    )
+    if audio:
+        from server.services import transcribe
+        if not transcribe.is_enabled():
+            await whatsapp_svc.send_text(
+                frm,
+                "🎙️ Voice notes aren't switched on yet — text me instead. "
+                "(An admin can enable them by setting VOICE_NOTES_ENABLED.)",
+            )
+            return
+        try:
+            data, ct = await whatsapp_twilio.download_media(audio["url"])
+            transcript = await transcribe.transcribe(data, ct)
+        except Exception:
+            logger.exception("Voice-note download/transcription failed for %s", frm)
+            transcript = None
+        if not transcript:
+            await whatsapp_svc.send_text(
+                frm,
+                "🎙️ I couldn't make out that voice note — could you try again, "
+                "or send it as text?",
+            )
+            return
+        # Treat the transcript as the user's message and run the assistant on it.
+        try:
+            result = await ai_assistant.chat(user, transcript, channel="whatsapp")
+            reply = (result.get("reply") or "Done.").strip()
+        except Exception:
+            logger.exception("Voice-note AI handling failed")
+            reply = "Sorry — something went wrong with that. Try again?"
+        try:
+            await whatsapp_svc.send_text(frm, f"🎙️ \"{transcript}\"\n\n{reply}")
+        except Exception:
+            logger.exception("Failed to send WhatsApp voice reply to %s", frm)
+        return
+
     # --- Ingest any attached photos/videos into the family media library ---
     added = 0
     if media:
@@ -374,6 +416,13 @@ async def _handle_whatsapp_message(msg: dict) -> None:
 @router.get("/whatsapp/status")
 def whatsapp_status(_: dict = Depends(require_user)):
     return {"configured": whatsapp_svc.is_configured()}
+
+
+@router.get("/whatsapp/voice-status")
+def whatsapp_voice_status(_: dict = Depends(require_user)):
+    """Whether WhatsApp voice-note transcription is switched on (dormant by default)."""
+    from server.services import transcribe
+    return {"enabled": transcribe.is_enabled()}
 
 
 @router.post("/whatsapp/test-digest")

@@ -3483,6 +3483,21 @@ dialog select:focus {
 
 .connection-status.connected { color: var(--green); }
 
+.voice-notes-line {
+  margin-top: 12px;
+  padding: 10px 12px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border-radius: 8px;
+}
+
+.voice-notes-line.is-on {
+  color: var(--green);
+  background: var(--green-bg);
+}
+
 /* --- Modal preview --- */
 
 .modal-backdrop {

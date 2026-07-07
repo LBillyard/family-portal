@@ -4065,6 +4065,7 @@ function renderSettings(data) {
         )
         .join('')}
       <button class="btn btn-sm btn-primary wf-action" data-action="whatsapp-test" style="margin-top:10px" ${integrations.whatsapp ? '' : 'disabled title="Configure WhatsApp in .env first"'}>Send me a test digest</button>
+      <div id="voice-notes-status" class="voice-notes-line" hidden></div>
     </div>
     <div class="settings-section">
       <h3>Weather</h3>
@@ -4169,6 +4170,27 @@ async function loadNotificationPrefs() {
     notifPrefs = null;
     section.hidden = true;
     section.innerHTML = '';
+  }
+}
+
+// Voice notes: a read-only status line in the WhatsApp assistant settings.
+// Enabling is a server-side env change (VOICE_NOTES_ENABLED), so there's no
+// toggle here — just tell the user whether it's on. Hide the line if the
+// endpoint is unavailable so the section degrades gracefully.
+async function loadVoiceStatus() {
+  const el = document.getElementById('voice-notes-status');
+  if (!el) return;
+  try {
+    const res = await api('/whatsapp/voice-status');
+    const on = !!(res && res.enabled);
+    el.hidden = false;
+    el.classList.toggle('is-on', on);
+    el.textContent = on
+      ? "🎙️ Voice notes: On — send the Hub a WhatsApp voice note and it'll transcribe + act on it"
+      : "🎙️ Voice notes: Off — send a voice note to the Hub's WhatsApp and it gets transcribed once enabled (set VOICE_NOTES_ENABLED on the server).";
+  } catch {
+    el.hidden = true;
+    el.textContent = '';
   }
 }
 
@@ -7279,7 +7301,7 @@ async function load() {
   if (subscriptions) renderSubscriptions(subscriptions);
   if (documents) renderDocuments(documents);
   if (memory) renderMemory(memory);
-  if (settings) { renderSettings(settings); loadNotificationPrefs(); refreshPushUI(); }
+  if (settings) { renderSettings(settings); loadNotificationPrefs(); refreshPushUI(); loadVoiceStatus(); }
 
   failed.forEach(markSectionFailed);
   if (failed.length) console.error('Failed to load:', failed.join(', '));
