@@ -43,6 +43,34 @@ def test_body_text_prefers_plain_then_html():
     assert "Broadband is with BT" in gmail_memory._body_text(html_only)
 
 
+def test_body_text_strips_html_hidden_in_plain_part_and_decodes_entities():
+    """Airlines (Ryanair) put a full HTML document into a part labelled text/plain.
+    A non-empty plain part must NOT be trusted as clean — tags are always stripped
+    and HTML entities decoded, otherwise flight dates drown in markup."""
+    import base64
+
+    def b64(s):
+        return base64.urlsafe_b64encode(s.encode()).decode()
+
+    sneaky = {"mimeType": "text/plain", "body": {"data": b64(
+        "<html><head><style>.x{color:red}</style></head><body>"
+        "Flight FR4370 Manchester &rarr; Seville Tue, 16 Jun 26 &nbsp; 07:45 "
+        "Total &pound;36.00</body></html>"
+    )}}
+    out = gmail_memory._body_text(sneaky)
+    assert "<" not in out and "style" not in out            # tags + CSS gone
+    assert "Flight FR4370 Manchester" in out and "16 Jun 26" in out
+    assert "→" in out and "£36.00" in out                    # entities decoded
+    assert "&nbsp;" not in out and "&pound;" not in out
+
+    # A genuine plain-text body containing "<" (maths/comparisons) must be left
+    # intact — the HTML heuristic keys on real tag names, not a bare "<".
+    plainmath = {"mimeType": "text/plain", "body": {"data": b64(
+        "Reminder: keep spend < 100 and a<b in the report"
+    )}}
+    assert gmail_memory._body_text(plainmath) == "Reminder: keep spend < 100 and a<b in the report"
+
+
 def test_scan_dedupes_and_maps_source(client, monkeypatch):
     # Mock embed so remember()/known lookups don't hit the network.
     async def _embed(texts):

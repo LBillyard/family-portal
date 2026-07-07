@@ -11,6 +11,7 @@ review and pick. Nothing is written until the user imports their selection.
 from __future__ import annotations
 
 import base64
+import html as _html
 import json
 import logging
 import os
@@ -71,12 +72,19 @@ def _body_text(payload: dict) -> str:
             walk(sub)
 
     walk(payload)
-    text = "\n".join(plain)
-    if not text.strip():
-        # HTML-only email: drop <style>/<script>/<head> (CSS/JS) BEFORE stripping tags,
-        # otherwise stylesheet junk leaks into the text the AI reads.
-        raw = re.sub(r"(?is)<(style|script|head)\b[^>]*>.*?</\1>", " ", "\n".join(html))
-        text = re.sub(r"<[^>]+>", " ", raw)
+    text = "\n".join(plain).strip() or "\n".join(html)
+    # Sanitise whenever the text actually contains HTML markup — not just for
+    # HTML-only emails. Some senders (airlines especially) stuff a full HTML
+    # document into a part labelled text/plain, so a non-empty plain part is NOT
+    # a guarantee of clean text. We look for a real tag name or doctype (not a
+    # bare "<") so genuine plain text like "price < 100" is left untouched. Drop
+    # <style>/<script>/<head> (CSS/JS) BEFORE stripping tags, else stylesheet
+    # junk leaks into the text the AI reads.
+    if re.search(r"(?i)<!doctype|</?(?:html|head|body|div|span|table|tr|td|p|br|a|b|img|style|script|meta|title|h[1-6]|ul|ol|li)[\s>/]", text):
+        text = re.sub(r"(?is)<(style|script|head)\b[^>]*>.*?</\1>", " ", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+    # Decode HTML entities (&pound;, &nbsp;, &#163;…) to real characters.
+    text = _html.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
 
 
