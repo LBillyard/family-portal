@@ -262,6 +262,7 @@ def init_db() -> None:
                 taken_at TEXT,
                 uploaded_at TEXT NOT NULL,
                 user_id TEXT,
+                source TEXT NOT NULL DEFAULT 'upload',
                 FOREIGN KEY (trip_id) REFERENCES holiday_trips(id) ON DELETE SET NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
@@ -536,10 +537,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             taken_at TEXT,
             uploaded_at TEXT NOT NULL,
             user_id TEXT,
+            source TEXT NOT NULL DEFAULT 'upload',
             FOREIGN KEY (trip_id) REFERENCES holiday_trips(id) ON DELETE SET NULL,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )"""
     )
+    mcols = {r[1] for r in conn.execute("PRAGMA table_info(media_items)").fetchall()}
+    if "source" not in mcols:
+        conn.execute("ALTER TABLE media_items ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'")
     conn.execute(
         """CREATE TABLE IF NOT EXISTS subscriptions (
             id TEXT PRIMARY KEY,
@@ -2331,8 +2336,8 @@ def create_media(data: dict) -> dict:
     with get_conn() as conn:
         conn.execute(
             """INSERT INTO media_items
-               (id, title, caption, media_type, trip_id, file_name, file_path, mime_type, file_size, taken_at, uploaded_at, user_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, title, caption, media_type, trip_id, file_name, file_path, mime_type, file_size, taken_at, uploaded_at, user_id, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 mid,
                 data["title"],
@@ -2346,6 +2351,7 @@ def create_media(data: dict) -> dict:
                 data.get("taken_at") or "",
                 now,
                 data.get("user_id"),
+                data.get("source", "upload"),
             ),
         )
     return get_media(mid)  # type: ignore[return-value]
@@ -2388,6 +2394,7 @@ def _media_out(r: dict) -> dict:
         "taken_at": r.get("taken_at") or "",
         "uploaded_at": r.get("uploaded_at"),
         "user_id": r.get("user_id"),
+        "source": r.get("source", "upload"),
         "has_file": bool(r.get("file_path")),
     }
 

@@ -91,6 +91,7 @@ const DOC_CATEGORY_LABELS = {
 
 let vaultFilter = 'all';
 let mediaFilter = 'all';
+let mediaStorage = null;
 let tripFilter = 'all';
 let calView = 'month';
 let calCursor = null;
@@ -2730,111 +2731,268 @@ function renderDocuments(data, filter = vaultFilter) {
     : `<div class="vault-empty"><p>No documents in this category yet.</p><p class="hint-small">Upload your home insurance, passports, MOT or other files above.</p></div>`;
 }
 
+// Human-readable byte size for the storage meter: 12 KB / 340 MB / 1.2 GB.
+function humanBytes(bytes) {
+  const b = Number(bytes);
+  if (!isFinite(b) || b <= 0) return '0 B';
+  if (b < 1024) return `${Math.round(b)} B`;
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${Math.round(b / (1024 * 1024))} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+// Prominent storage card: media size + count, disk-usage bar, free/total, low warning.
+function renderMediaStorage(s) {
+  const el = document.getElementById('media-storage');
+  if (!el) return;
+  if (!s) { el.innerHTML = ''; return; }
+  const pct = Math.max(0, Math.min(100, Math.round(
+    s.disk_pct_used != null ? s.disk_pct_used : (s.disk_total ? (s.disk_used / s.disk_total) * 100 : 0)
+  )));
+  const count = s.media_count || 0;
+  el.innerHTML = `
+    <div class="storage-card${s.low ? ' storage-low' : ''}">
+      <div class="storage-head">
+        <div class="storage-title">
+          <span class="storage-count">${count} ${count === 1 ? 'photo &amp; video' : 'photos &amp; videos'}</span>
+          <span class="storage-sub">${humanBytes(s.media_bytes)} of memories</span>
+        </div>
+        <span class="storage-pct">${pct}%</span>
+      </div>
+      <div class="storage-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100">
+        <div class="storage-bar-fill" style="width:${pct}%"></div>
+      </div>
+      <div class="storage-foot">
+        <span>${humanBytes(s.disk_free)} free of ${humanBytes(s.disk_total)}</span>
+      </div>
+      ${s.low ? `<p class="storage-warn">⚠️ Running low on space — free up room or ask to expand storage.</p>` : ''}
+    </div>`;
+}
+
+// Fetch the storage stats and paint the meter (own endpoint, called from load()).
+async function loadMediaStorage() {
+  try {
+    mediaStorage = await api('/media/storage');
+  } catch {
+    mediaStorage = null;
+  }
+  renderMediaStorage(mediaStorage);
+}
+
+// Re-fetch gallery + storage and repaint just the Photos tab (after uploads/deletes).
+async function refreshMedia() {
+  try {
+    const [media, storage] = await Promise.all([
+      api('/media'),
+      api('/media/storage').catch(() => null),
+    ]);
+    store.media = media;
+    renderMedia(media, mediaFilter);
+    if (storage) { mediaStorage = storage; renderMediaStorage(storage); }
+  } catch (err) {
+    console.error('refreshMedia failed', err);
+  }
+}
+
 function renderMedia(data, filter = mediaFilter) {
   const { items = [], trips = [] } = data;
   const filtered =
-    filter === 'all' ? items : filter === 'none' ? items.filter((m) => !m.trip_id) : items.filter((m) => m.trip_id === filter);
-  const photos = items.filter((m) => m.media_type === 'photo').length;
-  const videos = items.filter((m) => m.media_type === 'video').length;
-  const linked = items.filter((m) => m.trip_id).length;
+    filter === 'all'
+      ? items
+      : filter === 'none'
+      ? items.filter((m) => !m.trip_id)
+      : items.filter((m) => String(m.trip_id) === String(filter));
 
-  const tripSelect = document.getElementById('media-trip-select');
-  if (tripSelect) {
-    tripSelect.innerHTML =
-      '<option value="">No trip</option>' +
-      trips.map((t) => `<option value="${t.id}">${esc(t.title)}</option>`).join('');
+  // Optional trip filter — only shown when trips exist; defaults to All.
+  const filtersEl = document.getElementById('media-filters');
+  if (filtersEl) {
+    filtersEl.innerHTML = trips.length
+      ? `<button class="filter-chip-btn wf-action ${filter === 'all' ? 'active' : ''}" data-media-trip="all">All</button>` +
+        trips
+          .map(
+            (t) =>
+              `<button class="filter-chip-btn wf-action ${String(filter) === String(t.id) ? 'active' : ''}" data-media-trip="${esc(t.id)}">${esc(t.title)}</button>`
+          )
+          .join('')
+      : '';
   }
-
-  document.getElementById('media-stats').innerHTML = `
-    <div class="stat"><span>${items.length}</span><label>Total items</label></div>
-    <div class="stat"><span>${photos}</span><label>Photos</label></div>
-    <div class="stat"><span>${videos}</span><label>Videos</label></div>
-    <div class="stat"><span>${linked}</span><label>Linked to trips</label></div>`;
-
-  document.getElementById('media-filters').innerHTML =
-    `<button class="filter-chip-btn wf-action ${filter === 'all' ? 'active' : ''}" data-media-trip="all">All</button>` +
-    `<button class="filter-chip-btn wf-action ${filter === 'none' ? 'active' : ''}" data-media-trip="none">Unlinked</button>` +
-    trips
-      .map(
-        (t) =>
-          `<button class="filter-chip-btn wf-action ${filter === t.id ? 'active' : ''}" data-media-trip="${t.id}">${esc(t.title)}</button>`
-      )
-      .join('');
 
   document.getElementById('media-grid').innerHTML = filtered.length
     ? filtered
         .map((m) => {
-          const fileUrl = m.has_file ? `/api/media/${m.id}/file` : '';
-          const preview =
-            m.media_type === 'photo' && fileUrl
-              ? `<img class="media-thumb" src="${fileUrl}" alt="${esc(m.title)}" loading="lazy">`
-              : `<div class="media-thumb media-thumb-video"><span>▶</span><small>Video</small></div>`;
+          const fileUrl = `/api/media/${m.id}/file`;
+          const isVideo = m.media_type === 'video';
+          const alt = esc(m.title || m.caption || m.file_name || (isVideo ? 'Video' : 'Photo'));
+          const capAttr = m.caption ? ` title="${esc(m.caption)}"` : '';
+          const media = isVideo
+            ? `<video class="media-tile-media" src="${fileUrl}" muted preload="metadata" playsinline></video><span class="media-play" aria-hidden="true">▶</span>`
+            : `<img class="media-tile-media" src="${fileUrl}" alt="${alt}" loading="lazy">`;
+          const badge = m.source === 'whatsapp' ? `<span class="media-src-badge">via WhatsApp</span>` : '';
           return `
-      <article class="media-card">
-        <a href="${fileUrl || '#'}" class="media-preview" target="_blank" rel="noopener"${fileUrl ? '' : ' aria-disabled="true"'}>
-          ${preview}
-        </a>
-        <div class="media-card-body">
-          <h3 class="media-card-title">${esc(m.title)}</h3>
-          ${m.trip_title ? `<span class="media-trip-pill">${esc(m.trip_title)}</span>` : ''}
-          ${m.caption ? `<p class="media-card-caption">${esc(m.caption)}</p>` : ''}
-          <div class="media-card-meta">
-            ${m.taken_at ? `<span>${fmt.date(m.taken_at)}</span>` : ''}
-            ${m.has_file ? `<span>${fmt.fileSize(m.file_size)}</span>` : ''}
-          </div>
-          <div class="media-card-actions">
-            ${fileUrl ? `<a class="btn btn-sm btn-soft" href="${fileUrl}" target="_blank" rel="noopener">View</a>` : ''}
-            <button class="btn btn-sm btn-soft wf-action" data-action="edit-media" data-media-id="${m.id}">Edit</button>
-            <button class="btn btn-sm btn-ghost wf-action" data-action="delete-media" data-media-id="${m.id}">Delete</button>
-          </div>
-        </div>
-      </article>`;
+      <div class="media-tile${isVideo ? ' is-video' : ''}" data-media-open="${esc(m.id)}" data-media-type="${isVideo ? 'video' : 'photo'}"${capAttr}>
+        ${media}
+        ${badge}
+        <button type="button" class="media-del wf-action" data-action="delete-media" data-media-id="${esc(m.id)}" title="Delete" aria-label="Delete">&times;</button>
+      </div>`;
         })
         .join('')
-    : `<div class="vault-empty"><p>No photos or videos yet.</p><p class="hint-small">Upload family memories and link them to your holidays.</p></div>`;
+    : `<div class="vault-empty"><p>No photos yet — tap Upload, or send a photo to the Hub on WhatsApp and it'll appear here.</p></div>`;
 }
 
-function openEditMediaModal(mediaId) {
-  const m = (store.media?.items || []).find((x) => String(x.id) === String(mediaId));
-  if (!m) return showToast('Media not found', true);
-  const trips = store.media?.trips || store.holidays?.trips || [];
-  const tripOpts = '<option value="">No trip</option>' + trips
-    .map((t) => `<option value="${esc(t.id)}"${t.id === m.trip_id ? ' selected' : ''}>${esc(t.title)}</option>`)
-    .join('');
-  document.getElementById('modal-root').innerHTML = `
-    <div class="modal-backdrop" id="modal-backdrop"></div>
-    <div class="wf-modal" role="dialog">
-      <div class="wf-modal-header"><h3>Edit photo / video</h3><p>Rename, caption, or link to a trip.</p></div>
-      <div class="wf-modal-body">
-        <label class="field field-full"><span>Title</span><input type="text" id="md-title" value="${esc(m.title)}"></label>
-        <label class="field field-full"><span>Caption</span><input type="text" id="md-caption" value="${esc(m.caption || '')}"></label>
-        <label class="field field-full"><span>Trip</span><select id="md-trip">${tripOpts}</select></label>
-        <label class="field field-full"><span>Date taken</span><input type="date" id="md-taken" value="${esc((m.taken_at || '').slice(0, 10))}"></label>
+// --- Frictionless upload: hidden file input → immediate XHR uploads with progress ---
+
+function mediaProgressRow(name, i) {
+  return `
+    <div class="mup-row" data-mup="${i}">
+      <div class="mup-head">
+        <span class="mup-name">${esc(name)}</span>
+        <span class="mup-status" aria-hidden="true"></span>
       </div>
-      <div class="wf-modal-footer">
-        <button type="button" class="btn btn-secondary wf-action" data-action="close-modal">Cancel</button>
-        <button type="button" class="btn btn-primary" id="md-save">Save</button>
-      </div>
+      <div class="mup-bar"><div class="mup-bar-fill"></div></div>
+      <p class="mup-msg"></p>
     </div>`;
-  document.getElementById('modal-backdrop').onclick = closeModal;
-  document.getElementById('md-save').onclick = async () => {
-    try {
-      await api(`/media/${mediaId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          title: document.getElementById('md-title').value.trim(),
-          caption: document.getElementById('md-caption').value.trim(),
-          trip_id: document.getElementById('md-trip').value,
-          taken_at: document.getElementById('md-taken').value,
-        }),
-      });
-      closeModal();
-      showToast('Media updated');
-      await load();
-    } catch (err) {
-      showToast(err.message, true);
+}
+
+function setMupState(row, state, msg) {
+  if (!row) return;
+  row.classList.remove('mup-done', 'mup-error', 'mup-skip');
+  const status = row.querySelector('.mup-status');
+  const msgEl = row.querySelector('.mup-msg');
+  const fill = row.querySelector('.mup-bar-fill');
+  if (state === 'done') {
+    row.classList.add('mup-done');
+    if (status) status.textContent = '✔';
+    if (fill) fill.style.width = '100%';
+  } else if (state === 'error') {
+    row.classList.add('mup-error');
+    if (status) status.textContent = '✗';
+  } else if (state === 'skip') {
+    row.classList.add('mup-skip');
+    if (status) status.textContent = '⤼';
+  }
+  if (msgEl) msgEl.textContent = msg || '';
+}
+
+// Upload a single file via XMLHttpRequest so we get real upload progress.
+function uploadOneMedia(file, row) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API}/media/upload`);
+    xhr.withCredentials = true;
+    const fill = row && row.querySelector('.mup-bar-fill');
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && fill) {
+        fill.style.width = `${Math.round((ev.loaded / ev.total) * 100)}%`;
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        let item = null;
+        try { item = JSON.parse(xhr.responseText); } catch { /* non-JSON ok */ }
+        resolve(item);
+      } else {
+        let msg = 'Upload failed';
+        try {
+          const j = JSON.parse(xhr.responseText);
+          if (Array.isArray(j.detail)) msg = j.detail.map((d) => d.msg).join('; ');
+          else if (j.detail) msg = j.detail;
+        } catch { /* keep default */ }
+        reject(new Error(msg));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Network error — upload failed'));
+    xhr.send(fd);
+  });
+}
+
+const MEDIA_SPACE_MARGIN = 100 * 1024 * 1024; // keep 100 MB headroom on disk
+
+// Orchestrate: pre-flight space check, type guard, then upload with concurrency 2.
+async function handleMediaFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+
+  const listEl = document.getElementById('media-progress');
+  if (listEl) {
+    listEl.hidden = false;
+    listEl.innerHTML = files.map((f, i) => mediaProgressRow(f.name, i)).join('');
+  }
+  const rows = files.map((_, i) => listEl && listEl.querySelector(`.mup-row[data-mup="${i}"]`));
+
+  // Latest disk figures for the pre-flight check; track a running projection as we go.
+  let storage = null;
+  try { storage = await api('/media/storage'); } catch { storage = null; }
+  let projectedFree = storage && isFinite(storage.disk_free) ? storage.disk_free : Infinity;
+
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      const i = next++;
+      const file = files[i];
+      const row = rows[i];
+
+      // Client-side type guard — mirror the backend image/* + video/* allow-list.
+      // Fall back to the file extension when the browser reports no MIME type
+      // (iPhone HEIC and some videos come through with an empty file.type).
+      const okType = /^(image|video)\//.test(file.type || '')
+        || /\.(jpe?g|png|webp|heic|gif|mp4|mov|webm|m4v)$/i.test(file.name || '');
+      if (!okType) {
+        setMupState(row, 'skip', 'Not a photo or video — skipped');
+        continue;
+      }
+      // Pre-flight space check against the latest free space (minus safety margin).
+      if (isFinite(projectedFree) && file.size > projectedFree - MEDIA_SPACE_MARGIN) {
+        setMupState(row, 'error', 'Not enough space — free up room or expand storage');
+        continue;
+      }
+      try {
+        await uploadOneMedia(file, row);
+        projectedFree -= file.size;
+        setMupState(row, 'done', humanBytes(file.size));
+        // Repaint just the gallery per file; disk/storage stats refreshed once at the end.
+        try { const media = await api('/media'); store.media = media; renderMedia(media, mediaFilter); } catch {}
+      } catch (err) {
+        setMupState(row, 'error', err.message || 'Upload failed');
+      }
     }
   };
+
+  // Small concurrency (2) so a batch uploads briskly without hammering the box.
+  await Promise.all([worker(), worker()]);
+  // Recompute disk/storage stats ONCE after the whole batch (scandir is O(files),
+  // so refreshing per-upload would be O(n²) on a large gallery).
+  await loadMediaStorage();
+}
+
+// Lightweight lightbox overlay — click a tile to view it large.
+function openMediaLightbox(id, type) {
+  closeMediaLightbox();
+  const fileUrl = `/api/media/${id}/file`;
+  const inner = type === 'video'
+    ? `<video class="media-lightbox-media" src="${fileUrl}" controls autoplay playsinline></video>`
+    : `<img class="media-lightbox-media" src="${fileUrl}" alt="">`;
+  const overlay = document.createElement('div');
+  overlay.id = 'media-lightbox';
+  overlay.className = 'media-lightbox';
+  overlay.innerHTML = `
+    <button type="button" class="media-lightbox-close" aria-label="Close">&times;</button>
+    ${inner}`;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay || e.target.closest('.media-lightbox-close')) closeMediaLightbox();
+  });
+  document.addEventListener('keydown', mediaLightboxKey);
+  document.body.appendChild(overlay);
+}
+
+function mediaLightboxKey(e) {
+  if (e.key === 'Escape') closeMediaLightbox();
+}
+
+function closeMediaLightbox() {
+  document.removeEventListener('keydown', mediaLightboxKey);
+  document.getElementById('media-lightbox')?.remove();
 }
 
 function subscriptionStatusLabel(status) {
@@ -3873,6 +4031,14 @@ function initActions() {
       return;
     }
 
+    // Open a photo/video large in the lightbox — but let the delete button (a
+    // .wf-action inside the tile) fall through to the action dispatch below.
+    const mediaTile = e.target.closest('[data-media-open]');
+    if (mediaTile && !e.target.closest('.wf-action')) {
+      openMediaLightbox(mediaTile.dataset.mediaOpen, mediaTile.dataset.mediaType);
+      return;
+    }
+
     const catBtn = e.target.closest('[data-vault-cat]');
     if (catBtn) {
       vaultFilter = catBtn.dataset.vaultCat;
@@ -4115,7 +4281,7 @@ function initActions() {
         api(`/media/${mediaId}`, { method: 'DELETE' })
           .then(() => {
             showToast('Media deleted');
-            load();
+            refreshMedia();
           })
           .catch((err) => showToast(err.message, true));
       }
@@ -5472,40 +5638,18 @@ function initActions() {
     }
   });
 
-  document.getElementById('media-upload-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const form = e.target;
-    const fileInput = form.querySelector('input[name="file"]');
-    const file = fileInput?.files?.[0];
-    if (!file) {
-      showToast('Choose a photo or video', true);
-      return;
-    }
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('title', form.title.value.trim());
-    formData.append('caption', form.caption.value.trim());
-    formData.append('trip_id', form.trip_id.value);
-    formData.append('taken_at', form.taken_at.value);
-    try {
-      showToast('Uploading…');
-      const res = await fetch(`${API}/media/upload`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || 'Upload failed');
-      }
-      form.reset();
-      showToast('Media uploaded');
-      switchTab('media');
-      await load();
-    } catch (err) {
-      showToast(err.message, true);
-    }
-  });
+  // Frictionless Photos upload: the button opens the hidden multi-file picker,
+  // and selecting files uploads them immediately (no title/caption/trip prompts).
+  const mediaUploadBtn = document.getElementById('media-upload-btn');
+  const mediaFileInput = document.getElementById('media-file-input');
+  if (mediaUploadBtn && mediaFileInput) {
+    mediaUploadBtn.addEventListener('click', () => mediaFileInput.click());
+    mediaFileInput.addEventListener('change', async () => {
+      const files = mediaFileInput.files;
+      if (files && files.length) await handleMediaFiles(files);
+      mediaFileInput.value = ''; // allow re-picking the same file(s)
+    });
+  }
 
   document.getElementById('maintenance-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -6009,7 +6153,7 @@ const SECTION_CONTAINERS = {
   appointments: ['appointments-body'],
   holidays: ['holiday-trips', 'holiday-ideas'],
   documents: ['vault-stats', 'vault-grid'],
-  media: ['media-stats', 'media-grid'],
+  media: ['media-storage', 'media-grid'],
   subscriptions: ['subscription-stats', 'subscription-list'],
   settings: ['settings-content'],
   briefing: ['briefing-card'],
@@ -6416,6 +6560,7 @@ async function load() {
   if (appointments) renderAppointments(appointments);
   if (holidays) renderHolidays(holidays);
   if (media) renderMedia(media);
+  loadMediaStorage(); // Photos → storage meter (own endpoint)
   if (subscriptions) renderSubscriptions(subscriptions);
   if (documents) renderDocuments(documents);
   if (memory) renderMemory(memory);

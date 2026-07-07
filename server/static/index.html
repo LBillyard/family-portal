@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=44">
+  <link rel="stylesheet" href="/static/style.css?v=45">
   <script>
     // No-flash theme guard: set the theme attribute before first paint.
     // 'system' (or unset) leaves the attribute off so prefers-color-scheme wins.
@@ -588,45 +588,22 @@
       <section id="tab-media" class="tab-panel">
         <div class="panel-header">
           <h2 class="panel-title">Family photos &amp; videos</h2>
-          <p class="panel-desc">Upload memories and link them to holiday trips.</p>
+          <p class="panel-desc">Every memory in one place — tap upload and they're in. Photos and videos sent to the Hub on WhatsApp land here too.</p>
         </div>
 
-        <div class="card vault-upload-card">
-          <div class="card-header"><h3>Upload photo or video</h3><p>Images up to 15 MB · videos up to 50 MB</p></div>
-          <form id="media-upload-form" class="vault-upload-form">
-            <div class="vault-form-grid">
-              <label class="field">
-                <span>Title</span>
-                <input type="text" name="title" placeholder="e.g. Beach sunset" required>
-              </label>
-              <label class="field">
-                <span>Link to trip <small>(optional)</small></span>
-                <select name="trip_id" id="media-trip-select">
-                  <option value="">No trip</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>Date taken <small>(optional)</small></span>
-                <input type="date" name="taken_at">
-              </label>
-              <label class="field field-full">
-                <span>Caption <small>(optional)</small></span>
-                <input type="text" name="caption" placeholder="Who, where, what happened…">
-              </label>
-              <label class="field field-full vault-file-field">
-                <span>File</span>
-                <input type="file" name="file" accept="image/*,video/*,.mp4,.mov,.webm,.m4v" required>
-              </label>
-            </div>
-            <button type="submit" class="btn btn-primary">Upload</button>
-          </form>
-        </div>
+        <div id="media-storage" class="storage-card-wrap"></div>
 
-        <div class="card-toolbar" style="margin-top:20px">
+        <div class="media-upload-bar">
+          <button type="button" id="media-upload-btn" class="btn btn-primary btn-upload">
+            <svg class="btn-icon-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 01.707.293l4 4a1 1 0 01-1.414 1.414L11 6.414V13a1 1 0 11-2 0V6.414L6.707 8.707a1 1 0 01-1.414-1.414l4-4A1 1 0 0110 3zM4 15a1 1 0 011 1v1h10v-1a1 1 0 112 0v1a2 2 0 01-2 2H5a2 2 0 01-2-2v-1a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+            Upload photos &amp; videos
+          </button>
+          <input type="file" id="media-file-input" accept="image/*,video/*" multiple hidden>
           <div id="media-filters" class="toolbar-filters"></div>
         </div>
 
-        <div id="media-stats" class="stats-row vault-stats"></div>
+        <div id="media-progress" class="media-progress" hidden></div>
+
         <div id="media-grid" class="media-grid"></div>
       </section>
 
@@ -771,6 +748,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=44"></script>
+  <script src="/static/app.js?v=45"></script>
 </body>
 </html>

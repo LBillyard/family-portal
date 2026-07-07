@@ -291,12 +291,63 @@ async def whatsapp_twilio_receive(request: Request):
 async def _handle_whatsapp_message(msg: dict) -> None:
     frm = msg.get("from", "")
     text = (msg.get("text") or "").strip()
-    if not frm or not text:
+    media = msg.get("media") or []
+    # A media-only message (photo with no caption) has empty text but must still run.
+    if not frm or (not text and not media):
         return
     user = db.get_user_by_phone(frm)
     if not user:
-        # Unknown number — ignore silently (don't reply to strangers).
+        # Unknown number — ignore silently (don't reply to strangers). This is the
+        # security gate: only linked household members can add media or chat.
         logger.warning("WhatsApp message from unlinked number %s — ignoring", frm)
+        return
+
+    # --- Ingest any attached photos/videos into the family media library ---
+    added = 0
+    if media:
+        for m in media:
+            url = m.get("url")
+            ext = media_files.ext_for_content_type(m.get("content_type"))
+            if not url or not ext:
+                continue
+            try:
+                data_bytes, _ct = await whatsapp_twilio.download_media(url)
+            except Exception:
+                logger.exception("WhatsApp media download failed for %s", frm)
+                continue  # one bad download must not break the rest
+            is_video = ext in media_files.VIDEO_EXTENSIONS
+            cap = media_files.VIDEO_MAX_BYTES if is_video else media_files.PHOTO_MAX_BYTES
+            if len(data_bytes) > cap:
+                logger.warning("WhatsApp media too large (%d bytes) — skipping", len(data_bytes))
+                continue
+            try:
+                media_files.ensure_media_dir()
+                mid = __import__("uuid").uuid4().hex[:12]
+                stored = f"{mid}_whatsapp{ext}"
+                (media_files.MEDIA_DIR / stored).write_bytes(data_bytes)
+                db.create_media({
+                    "id": mid,
+                    "title": f"WhatsApp {'video' if is_video else 'photo'}",
+                    "media_type": media_files.media_type_for_ext(ext),
+                    "file_name": stored,
+                    "file_path": stored,
+                    "mime_type": m.get("content_type"),
+                    "file_size": len(data_bytes),
+                    "user_id": user["id"],
+                    "source": "whatsapp",
+                })
+                added += 1
+            except Exception:
+                logger.exception("Saving WhatsApp media failed for %s", frm)
+        if added:
+            try:
+                await whatsapp_svc.send_text(frm, f"📸 Added {added} to your photos.")
+            except Exception:
+                logger.exception("Failed to send WhatsApp media reply to %s", frm)
+
+    # --- Handle text (if any) with the AI, exactly as before ---
+    # A media-only message (no text) skips the AI — just the photos reply above.
+    if not text:
         return
     try:
         if not ai_assistant.is_configured():
@@ -1658,11 +1709,19 @@ async def upload_media(
     taken_at: str = Form(""),
     user: dict = Depends(require_user),
 ):
-    content = await file.read()
-    try:
-        ext, media_type = media_files.validate_upload(file.filename or "file", len(content))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Validate the extension up-front so we never stream a rejected file to disk;
+    # the cap depends on photo vs video.
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in media_files.ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"File type not allowed. Photos: {', '.join(sorted(media_files.PHOTO_EXTENSIONS))}; "
+                f"videos: {', '.join(sorted(media_files.VIDEO_EXTENSIONS))}"
+            ),
+        )
+    media_type = media_files.media_type_for_ext(ext)
+    cap = media_files.VIDEO_MAX_BYTES if ext in media_files.VIDEO_EXTENSIONS else media_files.PHOTO_MAX_BYTES
 
     if trip_id:
         trips = {t["id"] for t in db.list_trips()}
@@ -1674,7 +1733,12 @@ async def upload_media(
     safe = media_files.safe_filename(file.filename or "media")
     stored = f"{mid}_{safe}"
     path = media_files.MEDIA_DIR / stored
-    path.write_bytes(content)
+
+    # Stream to disk in chunks — never buffer a whole (possibly 500MB) video in RAM.
+    try:
+        written = await media_files.stream_upload_to_disk(file, path, cap)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     item = db.create_media({
         "id": mid,
@@ -1685,11 +1749,17 @@ async def upload_media(
         "file_name": file.filename,
         "file_path": stored,
         "mime_type": media_files.mime_for_path(path),
-        "file_size": len(content),
+        "file_size": written,
         "taken_at": taken_at.strip(),
         "user_id": user["id"],
+        "source": "upload",
     })
     return item
+
+
+@router.get("/media/storage")
+def media_storage(_: dict = Depends(require_user)):
+    return media_files.storage_stats()
 
 
 @router.get("/media/{media_id}/file")

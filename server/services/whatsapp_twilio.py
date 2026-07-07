@@ -150,10 +150,24 @@ async def send_digest(to: str, text: str) -> dict:
 
 
 def parse_inbound(form: dict) -> list[dict]:
-    """Twilio inbound is form-encoded: From='whatsapp:+447...', Body, MessageSid."""
+    """Twilio inbound is form-encoded: From='whatsapp:+447...', Body, MessageSid.
+
+    Media is delivered as NumMedia + MediaUrl{i}/MediaContentType{i}. A message with
+    media but no text body is still valid (e.g. a photo with no caption)."""
     body = (form.get("Body") or "").strip()
     frm = form.get("From", "")
-    if not body or not frm.startswith("whatsapp:"):
+    if not frm.startswith("whatsapp:"):
+        return []
+    try:
+        num = int(form.get("NumMedia") or 0)
+    except (TypeError, ValueError):
+        num = 0
+    media = [
+        {"url": form.get(f"MediaUrl{i}"), "content_type": form.get(f"MediaContentType{i}")}
+        for i in range(num)
+        if form.get(f"MediaUrl{i}")
+    ]
+    if not body and not media:
         return []
     return [
         {
@@ -161,8 +175,28 @@ def parse_inbound(form: dict) -> list[dict]:
             "id": form.get("MessageSid", ""),
             "text": body,
             "name": form.get("ProfileName"),
+            "media": media,
         }
     ]
+
+
+_MEDIA_DOWNLOAD_CEILING = 25 * 1024 * 1024  # WhatsApp media is <=16MB; hard cap well above it
+
+
+async def download_media(url: str) -> tuple[bytes, str]:
+    """Download a Twilio media URL (basic-auth, follows the redirect to the CDN).
+    Streams with a hard ceiling so a misbehaving/huge response can't exhaust RAM
+    on the 1GB box. Raises on HTTP error or if the body exceeds the ceiling."""
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with client.stream("GET", url, auth=(_sid(), _auth_token())) as resp:
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            buf = bytearray()
+            async for chunk in resp.aiter_bytes(256 * 1024):
+                buf += chunk
+                if len(buf) > _MEDIA_DOWNLOAD_CEILING:
+                    raise ValueError("Media too large to download")
+            return bytes(buf), content_type
 
 
 def validate_request(url: str, params: dict, signature: str | None) -> bool:
