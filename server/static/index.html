@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=38">
+  <link rel="stylesheet" href="/static/style.css?v=39">
 </head>
 <body>
   <header class="site-header">
@@ -155,6 +155,15 @@
           </div>
 
           <div class="card">
+            <div class="card-header"><h3>Shopping list</h3><p>Shared between you</p></div>
+            <div class="shopping-add">
+              <input type="text" id="shopping-input" class="shopping-input" placeholder="Add an item…" autocomplete="off">
+              <button class="btn btn-sm btn-primary wf-action" data-action="add-shopping">Add</button>
+            </div>
+            <div id="home-shopping"></div>
+          </div>
+
+          <div class="card">
             <div class="card-header-row">
               <div class="card-header"><h3>Bills due soon</h3><p>Upcoming payments</p></div>
               <button class="card-link-btn wf-action" data-tab-link="finances">View all</button>
@@ -259,6 +268,22 @@
         <div id="finance-stats" class="stats-row"></div>
         <div id="bank-connections" class="card" style="margin-bottom:16px;display:none"></div>
         <div id="accounts-row" class="accounts-row"></div>
+
+        <div class="two-col" style="margin:16px 0">
+          <div class="card" id="insights-card">
+            <div class="card-header"><h3>Insights</h3><p>This month vs last · spending patterns</p></div>
+            <div id="finance-insights"></div>
+          </div>
+          <div class="card" id="networth-card">
+            <div class="card-header-row">
+              <div class="card-header"><h3>Net worth</h3><p>Cash + assets − liabilities</p></div>
+              <button class="card-link-btn wf-action" data-action="add-asset">+ Asset</button>
+            </div>
+            <div id="networth-headline"></div>
+            <h4 class="assets-subhead">Assets</h4>
+            <div id="assets-list"></div>
+          </div>
+        </div>
 
         <div class="card" id="category-breakdown-card" style="margin:16px 0;display:none">
           <div class="card-header"><h3>Spending by category</h3><p>This month · excludes transfers, savings &amp; crypto</p></div>
@@ -668,6 +693,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=38"></script>
+  <script src="/static/app.js?v=39"></script>
 </body>
 </html>

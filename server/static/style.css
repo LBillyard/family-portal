@@ -4486,3 +4486,165 @@ dialog select:focus {
 .install-os { flex: 1; min-width: 210px; }
 .install-os strong { display: block; margin-bottom: 4px; color: var(--navy-800); }
 .install-os ol { margin: 0; padding-left: 18px; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }
+
+/* -------------------------------------------------------------------------- */
+/* Shared shopping list (home card)                                           */
+/* -------------------------------------------------------------------------- */
+.shopping-add { display: flex; gap: 8px; margin-bottom: 12px; }
+.shopping-input {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-family: var(--font);
+  color: var(--text);
+}
+.shopping-input:focus { outline: none; border-color: var(--accent); }
+.shopping-list { display: flex; flex-direction: column; }
+.shopping-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+}
+.shopping-item:last-child { border-bottom: none; }
+.shopping-check {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.shopping-text {
+  flex: 1;
+  font-size: 0.9375rem;
+  color: var(--navy-900);
+}
+.shopping-item.done .shopping-text {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.shopping-del {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+.shopping-del:hover { color: var(--red); }
+.shopping-clear {
+  margin-top: 12px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.shopping-clear:hover { text-decoration: underline; }
+
+/* -------------------------------------------------------------------------- */
+/* Finances — Insights card                                                   */
+/* -------------------------------------------------------------------------- */
+.insight-headline {
+  font-size: 1rem;
+  color: var(--navy-900);
+  margin-bottom: 4px;
+}
+.insight-headline strong {
+  font-size: 1.375rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.insight-up { color: var(--red); font-weight: 600; white-space: nowrap; }
+.insight-down { color: var(--green); font-weight: 600; white-space: nowrap; }
+.insight-section { margin-top: 16px; }
+.insight-subhead {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+.insight-line {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Finances — Net worth + assets                                              */
+/* -------------------------------------------------------------------------- */
+.networth-headline {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--navy-800);
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+.networth-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin: 14px 0 4px;
+}
+.networth-stat span {
+  display: block;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+}
+.networth-stat label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.networth-neg { color: var(--red); }
+.assets-subhead {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 18px 0 12px;
+}
+.asset-type-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+.asset-type-badge.property { background: var(--blue-bg); color: var(--blue); }
+.asset-type-badge.vehicle { background: var(--purple-bg); color: var(--purple); }
+.asset-type-badge.savings { background: var(--green-bg); color: var(--green); }
+.asset-type-badge.investment { background: var(--amber-bg); color: var(--amber); }
+.asset-value {
+  font-weight: 700;
+  color: var(--navy-900);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Large-transaction threshold input in notification prefs */
+.notif-pref-amount {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--navy-900);
+}

@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 
 from server import auth, database as db
@@ -23,10 +23,13 @@ from server.services import finance_merge, notifications as notify_svc, receipts
 from server.services import search as search_svc, trips as trips_svc, categorize as cz
 from server.services import weather as weather_svc, gmail_receipts, push as push_svc
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
+from server.services import insights, networth
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
     AppointmentUpdate,
+    AssetCreate,
+    AssetUpdate,
     AssistantChatRequest,
     BillCreate,
     BillLock,
@@ -55,6 +58,7 @@ from shared.schemas import (
     SavingsGoalCreate,
     SavingsGoalUpdate,
     SearchQuery,
+    ShoppingItemCreate,
     SubscriptionUpdate,
     TaskCreate,
     TaskUpdate,
@@ -887,6 +891,43 @@ def patch_subscription(sub_id: str, body: SubscriptionUpdate, _: dict = Depends(
     }
 
 
+# --- Spending insights & net worth ---
+
+@router.get("/finances/insights")
+def api_finances_insights(_: dict = Depends(require_user)):
+    return insights.build_insights()
+
+
+@router.get("/finances/networth")
+def api_finances_networth(_: dict = Depends(require_user)):
+    return networth.build_networth()
+
+
+@router.get("/assets")
+def api_assets(_: dict = Depends(require_user)):
+    return {"assets": db.list_assets()}
+
+
+@router.post("/assets")
+def create_asset_route(body: AssetCreate, _: dict = Depends(require_user)):
+    return {"asset": db.create_asset(body.model_dump())}
+
+
+@router.patch("/assets/{asset_id}")
+def update_asset_route(asset_id: str, body: AssetUpdate, _: dict = Depends(require_user)):
+    asset = db.update_asset(asset_id, body.model_dump(exclude_unset=True))
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return {"asset": asset}
+
+
+@router.delete("/assets/{asset_id}")
+def delete_asset_route(asset_id: str, _: dict = Depends(require_user)):
+    if not db.delete_asset(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return {"ok": True}
+
+
 # --- Appointments ---
 
 @router.get("/appointments")
@@ -1313,6 +1354,43 @@ def delete_tradesperson(person_id: str, user: dict = Depends(require_user)):
         raise HTTPException(status_code=404, detail="Tradesperson not found")
     activity_svc.log(user, "deleted", "tradesperson", "Removed contact", entity_id=person_id)
     return {"ok": True}
+
+
+# --- Shopping list (shared household) ---
+
+@router.get("/shopping")
+def api_shopping(_: dict = Depends(require_user)):
+    return {"items": db.list_shopping_items()}
+
+
+@router.post("/shopping")
+def create_shopping_item_route(body: ShoppingItemCreate, user: dict = Depends(require_user)):
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Item text is required")
+    return {"item": db.create_shopping_item(text, added_by=user["id"])}
+
+
+@router.patch("/shopping/{item_id}")
+def set_shopping_item_done_route(
+    item_id: str, done: bool = Body(..., embed=True), _: dict = Depends(require_user)
+):
+    item = db.set_shopping_item_done(item_id, done)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Shopping item not found")
+    return {"item": item}
+
+
+@router.delete("/shopping/{item_id}")
+def delete_shopping_item_route(item_id: str, _: dict = Depends(require_user)):
+    if not db.delete_shopping_item(item_id):
+        raise HTTPException(status_code=404, detail="Shopping item not found")
+    return {"ok": True}
+
+
+@router.post("/shopping/clear-done")
+def clear_done_shopping_route(_: dict = Depends(require_user)):
+    return {"cleared": db.clear_done_shopping_items()}
 
 
 # --- Tasks & documents ---

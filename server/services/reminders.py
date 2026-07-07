@@ -215,4 +215,28 @@ async def run_reminders() -> dict:
                 _push(doc.get("name") or "Document", body, badge=alerts)
                 db.mark_notified(key)
 
+    # --- Large transactions: alert the whole household to any recent spend over the threshold. ---
+    if prefs.get("large_transaction_alerts"):
+        threshold = int(prefs.get("large_transaction_threshold") or 200)
+        for t in db.list_transactions(limit=100):
+            amt = t.get("amount") or 0
+            if amt >= 0 or abs(amt) < threshold:
+                continue
+            txn_dt = _parse_dt(t.get("txn_date") or t.get("date"))
+            if not txn_dt or (today - txn_dt.date()).days > 3:   # only very recent, avoid alerting historical imports
+                continue
+            checked += 1
+            key = f"largetxn:{t['id']}"
+            if db.was_notified(key):
+                continue
+            desc = t.get("merchant_display") or t.get("display_name") or t.get("description") or "Transaction"
+            acct = t.get("account_name") or t.get("account")
+            at = f" — {acct}" if acct else ""
+            body = f"💳 Large transaction: £{abs(amt):.2f} at {desc}{at}"
+            if await _remind_household(household, body):
+                sent += len(household)
+                alerts += 1
+                _push("Large transaction", body, badge=alerts)
+                db.mark_notified(key)
+
     return {"sent": sent, "checked": checked}

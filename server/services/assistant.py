@@ -439,6 +439,24 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_shopping_item",
+            "description": "Add one or more items to the shared household shopping list.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Item names to add, e.g. ['milk', 'bread']",
+                    },
+                },
+                "required": ["items"],
+            },
+        },
+    },
 ]
 
 
@@ -833,6 +851,22 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
             if "assignee_id" in patch:
                 await notify_task_assignee(task, user, verb="reassigned a task to you")
             return {"ok": True, "task": task}
+        if name == "add_shopping_item":
+            raw = args.get("items")
+            if isinstance(raw, str):
+                raw = [raw]
+            elif not isinstance(raw, list):
+                raw = []
+            if not raw and args.get("text"):
+                raw = [args["text"]]
+            added: list[str] = []
+            for entry in raw:
+                text = str(entry or "").strip()
+                if not text:
+                    continue
+                db.create_shopping_item(text, added_by=uid if user else None)
+                added.append(text)
+            return {"ok": True, "added": added}
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)

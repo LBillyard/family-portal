@@ -293,6 +293,8 @@ def init_db() -> None:
                 renewal_reminders INTEGER NOT NULL DEFAULT 1,
                 document_expiry_reminders INTEGER NOT NULL DEFAULT 1,
                 reminder_lead_days INTEGER NOT NULL DEFAULT 2,
+                large_transaction_alerts INTEGER NOT NULL DEFAULT 1,
+                large_transaction_threshold INTEGER NOT NULL DEFAULT 200,
                 updated_at TEXT
             );
 
@@ -321,6 +323,26 @@ def init_db() -> None:
                 p256dh TEXT NOT NULL,
                 auth TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+
+            -- Shared household shopping list.
+            CREATE TABLE IF NOT EXISTS shopping_items (
+                id TEXT PRIMARY KEY,
+                text TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0,
+                added_by TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            -- Household assets (for net worth).
+            CREATE TABLE IF NOT EXISTS assets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'other',
+                value REAL NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
         """)
         _migrate(conn)
@@ -536,6 +558,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "phone" not in ucols:
         conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+
+    pcols = {r[1] for r in conn.execute("PRAGMA table_info(notification_prefs)").fetchall()}
+    if "large_transaction_alerts" not in pcols:
+        conn.execute("ALTER TABLE notification_prefs ADD COLUMN large_transaction_alerts INTEGER NOT NULL DEFAULT 1")
+    if "large_transaction_threshold" not in pcols:
+        conn.execute("ALTER TABLE notification_prefs ADD COLUMN large_transaction_threshold INTEGER NOT NULL DEFAULT 200")
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -2707,6 +2735,7 @@ _PREFS_BOOL_FIELDS = (
     "bill_reminders",
     "renewal_reminders",
     "document_expiry_reminders",
+    "large_transaction_alerts",
 )
 
 
@@ -2715,6 +2744,7 @@ def _prefs_out(r: dict) -> dict:
     for f in _PREFS_BOOL_FIELDS:
         out[f] = bool(r[f])
     out["reminder_lead_days"] = int(r["reminder_lead_days"])
+    out["large_transaction_threshold"] = int(r["large_transaction_threshold"])
     out["updated_at"] = r.get("updated_at")
     return out
 
@@ -2742,6 +2772,9 @@ def update_notification_prefs(data: dict) -> dict:
     if data.get("reminder_lead_days") is not None:
         fields.append("reminder_lead_days = ?")
         values.append(int(data["reminder_lead_days"]))
+    if data.get("large_transaction_threshold") is not None:
+        fields.append("large_transaction_threshold = ?")
+        values.append(int(data["large_transaction_threshold"]))
     with get_conn() as conn:
         if fields:
             fields.append("updated_at = ?")
@@ -2888,4 +2921,128 @@ def list_push_subscriptions() -> list[dict]:
 def delete_push_subscription(endpoint: str) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+        return cur.rowcount > 0
+
+
+# --- Shopping list (shared household list) ---
+
+def _shopping_item_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "text": r["text"],
+        "done": bool(r["done"]),
+        "added_by": r.get("added_by"),
+        "created_at": r.get("created_at"),
+    }
+
+
+def list_shopping_items() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM shopping_items ORDER BY done ASC, created_at ASC"
+        ).fetchall()
+        return [_shopping_item_out(row_to_dict(r)) for r in rows]
+
+
+def create_shopping_item(text: str, added_by: str | None = None) -> dict:
+    sid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO shopping_items (id, text, done, added_by, created_at)
+               VALUES (?, ?, 0, ?, ?)""",
+            (sid, text.strip(), added_by, now),
+        )
+        row = conn.execute("SELECT * FROM shopping_items WHERE id = ?", (sid,)).fetchone()
+        return _shopping_item_out(row_to_dict(row))
+
+
+def set_shopping_item_done(item_id: str, done: bool) -> Optional[dict]:
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM shopping_items WHERE id = ?", (item_id,)).fetchone():
+            return None
+        conn.execute(
+            "UPDATE shopping_items SET done = ? WHERE id = ?", (1 if done else 0, item_id)
+        )
+        row = conn.execute("SELECT * FROM shopping_items WHERE id = ?", (item_id,)).fetchone()
+        return _shopping_item_out(row_to_dict(row))
+
+
+def delete_shopping_item(item_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM shopping_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0
+
+
+def clear_done_shopping_items() -> int:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM shopping_items WHERE done = 1")
+        return cur.rowcount
+
+
+# --- Assets (net worth) ---
+
+def _asset_out(r: dict) -> dict:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "type": r["type"],
+        "value": float(r["value"]),
+        "notes": r.get("notes"),
+        "created_at": r.get("created_at"),
+        "updated_at": r.get("updated_at"),
+    }
+
+
+def list_assets() -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM assets ORDER BY value DESC").fetchall()
+        return [_asset_out(row_to_dict(r)) for r in rows]
+
+
+def create_asset(data: dict) -> dict:
+    aid = _new_id()
+    now = _utcnow()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO assets (id, name, type, value, notes, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                aid,
+                data["name"],
+                data.get("type") or "other",
+                float(data.get("value") or 0),
+                data.get("notes") or "",
+                now,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (aid,)).fetchone()
+        return _asset_out(row_to_dict(row))
+
+
+def update_asset(asset_id: str, data: dict) -> Optional[dict]:
+    fields, values = [], []
+    for key in ("name", "type", "notes"):
+        if key in data and data[key] is not None:
+            fields.append(f"{key} = ?")
+            values.append(data[key])
+    if data.get("value") is not None:
+        fields.append("value = ?")
+        values.append(float(data["value"]))
+    with get_conn() as conn:
+        if not conn.execute("SELECT id FROM assets WHERE id = ?", (asset_id,)).fetchone():
+            return None
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(_utcnow())
+            values.append(asset_id)
+            conn.execute(f"UPDATE assets SET {', '.join(fields)} WHERE id = ?", values)
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return _asset_out(row_to_dict(row))
+
+
+def delete_asset(asset_id: str) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
         return cur.rowcount > 0

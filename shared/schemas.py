@@ -288,6 +288,8 @@ class NotificationPrefsUpdate(BaseModel):
     renewal_reminders: Optional[bool] = None
     document_expiry_reminders: Optional[bool] = None
     reminder_lead_days: Optional[int] = Field(default=None, ge=0, le=30)
+    large_transaction_alerts: Optional[bool] = None
+    large_transaction_threshold: Optional[int] = None
 
 
 class TradespersonCreate(BaseModel):
@@ -329,4 +331,22 @@ class InboxImportItem(BaseModel):
 
 class InboxImport(BaseModel):
     items: List[InboxImportItem]
+
+
+class ShoppingItemCreate(BaseModel):
+    text: str
+
+
+class AssetCreate(BaseModel):
+    name: str
+    type: str = "other"
+    value: float = 0
+    notes: Optional[str] = None
+
+
+class AssetUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    value: Optional[float] = None
+    notes: Optional[str] = None
 

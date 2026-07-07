@@ -1,4 +1,4 @@
-const CACHE = 'family-portal-v2025-07-07';
+const CACHE = 'family-portal-v2025-07-08';
 
 self.addEventListener('install', (e) => {
   // Warm the shell so an installed PWA can open offline; assets cache on first fetch.

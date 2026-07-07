@@ -1293,6 +1293,77 @@ function renderHome(data) {
     </div>`;
 }
 
+// --- Shared shopping list (home card) ---
+// Refreshes on its own (not via the heavy load()) so ticking an item doesn't reset the page.
+async function loadShopping() {
+  const el = document.getElementById('home-shopping');
+  if (!el) return;
+  try {
+    const d = await api('/shopping');
+    store.shopping = d.items || [];
+    renderShopping(store.shopping);
+  } catch {
+    store.shopping = [];
+    el.innerHTML = '<p class="hint-small">Shopping list unavailable.</p>';
+  }
+}
+
+function renderShopping(items) {
+  const el = document.getElementById('home-shopping');
+  if (!el) return;
+  if (!items || !items.length) {
+    el.innerHTML = '<p class="hint-small">Nothing on the list</p>';
+    return;
+  }
+  const doneCount = items.filter((i) => i.done).length;
+  const rows = items
+    .map(
+      (i) => `
+    <label class="shopping-item${i.done ? ' done' : ''}" data-shop-id="${i.id}">
+      <input type="checkbox" class="shopping-check" data-shop-id="${i.id}"${i.done ? ' checked' : ''}>
+      <span class="shopping-text">${esc(i.text)}</span>
+      <button type="button" class="shopping-del wf-action" data-action="delete-shopping" data-shop-id="${i.id}" title="Remove" aria-label="Remove item">×</button>
+    </label>`
+    )
+    .join('');
+  const clear = doneCount
+    ? `<button type="button" class="shopping-clear wf-action" data-action="clear-done-shopping">Clear done (${doneCount})</button>`
+    : '';
+  el.innerHTML = `<div class="shopping-list">${rows}</div>${clear}`;
+}
+
+function addShoppingItem() {
+  const input = document.getElementById('shopping-input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  api('/shopping', { method: 'POST', body: JSON.stringify({ text }) })
+    .then(() => loadShopping())
+    .catch((err) => { showToast(err.message, true); input.value = text; });
+}
+
+function toggleShoppingItem(id, done) {
+  api(`/shopping/${id}`, { method: 'PATCH', body: JSON.stringify({ done }) })
+    .then(() => loadShopping())
+    .catch((err) => { showToast(err.message, true); loadShopping(); });
+}
+
+function deleteShoppingItem(id) {
+  api(`/shopping/${id}`, { method: 'DELETE' })
+    .then(() => loadShopping())
+    .catch((err) => showToast(err.message, true));
+}
+
+function clearDoneShopping() {
+  api('/shopping/clear-done', { method: 'POST' })
+    .then((r) => {
+      loadShopping();
+      if (r && r.cleared) showToast(`Cleared ${r.cleared} item${r.cleared === 1 ? '' : 's'}`);
+    })
+    .catch((err) => showToast(err.message, true));
+}
+
 function calYmd(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -1601,6 +1672,157 @@ function renderCategoryBreakdown(items) {
       </div>`
     )
     .join('');
+}
+
+// --- Finances: Insights card ---
+async function loadInsights() {
+  const el = document.getElementById('finance-insights');
+  if (!el) return;
+  try {
+    renderInsights(await api('/finances/insights'));
+  } catch {
+    // Older backend without the endpoint — leave a gentle placeholder.
+    el.innerHTML = '<p class="hint-small">Insights unavailable.</p>';
+  }
+}
+
+function renderInsights(d) {
+  const el = document.getElementById('finance-insights');
+  if (!el) return;
+  if (!d || !d.has_data) {
+    el.innerHTML = '<p class="hint-small">Not enough data yet — log or import some transactions to see spending insights.</p>';
+    return;
+  }
+  const parts = [];
+  let delta = '';
+  if (d.spend_delta_pct != null) {
+    const up = d.spend_delta_pct > 0;
+    delta = ` · <span class="${up ? 'insight-up' : 'insight-down'}">${up ? '▲' : '▼'} ${Math.abs(Math.round(d.spend_delta_pct))}% ${up ? 'more' : 'less'} than ${esc(d.last_month.label)}</span>`;
+  }
+  parts.push(`<p class="insight-headline"><strong>${fmt.gbp(d.this_month.spend)}</strong> spent in ${esc(d.this_month.label)}${delta}</p>`);
+  if (d.this_month.income) {
+    parts.push(`<p class="hint-small">Income ${fmt.gbp(d.this_month.income)} this month</p>`);
+  }
+  const cats = d.top_categories || [];
+  if (cats.length) {
+    const max = Math.max(...cats.map((c) => c.amount), 1);
+    const rows = cats
+      .slice(0, 5)
+      .map(
+        (c) => `
+      <div class="budget-row" style="margin-bottom:10px">
+        <div class="budget-row-head"><span>${esc(c.category)}</span><span>${fmt.gbp(c.amount)}</span></div>
+        <div class="progress-bar budget"><div class="progress-fill" style="width:${Math.round((c.amount / max) * 100)}%"></div></div>
+      </div>`
+      )
+      .join('');
+    parts.push(`<div class="insight-section"><h4 class="insight-subhead">Top categories</h4>${rows}</div>`);
+  }
+  const subs = d.subscriptions;
+  if (subs && subs.count) {
+    parts.push(`<p class="insight-line">🔁 ${subs.count} subscription${subs.count === 1 ? '' : 's'} · ${fmt.gbp(subs.monthly_total)}/mo (${fmt.gbp(subs.annualised)}/yr)</p>`);
+  }
+  if (d.biggest_expense) {
+    parts.push(`<p class="insight-line">💥 Biggest this month: ${esc(d.biggest_expense.description)} — ${fmt.gbp(d.biggest_expense.amount)}</p>`);
+  }
+  el.innerHTML = parts.join('');
+}
+
+// --- Finances: Net worth + manual assets (inline CRUD, mirrors tradespeople) ---
+const ASSET_TYPES = [
+  ['property', 'Property'],
+  ['vehicle', 'Vehicle'],
+  ['savings', 'Savings'],
+  ['investment', 'Investment'],
+  ['other', 'Other'],
+];
+const ASSET_TYPE_LABELS = { property: 'Property', vehicle: 'Vehicle', savings: 'Savings', investment: 'Investment', other: 'Other' };
+
+// Net worth and assets share the same data, so one loader refreshes both.
+async function loadNetWorth() {
+  const headEl = document.getElementById('networth-headline');
+  const listEl = document.getElementById('assets-list');
+  if (!headEl || !listEl) return;
+  try {
+    const [nw, assetsData] = await Promise.all([api('/finances/networth'), api('/assets')]);
+    store.assets = assetsData.assets || [];
+    renderNetWorth(nw);
+    renderAssets(store.assets);
+  } catch {
+    // Older backend without these endpoints — leave the card as-is.
+  }
+}
+
+function renderNetWorth(nw) {
+  const el = document.getElementById('networth-headline');
+  if (!el || !nw) return;
+  el.innerHTML = `
+    <div class="networth-headline">${fmt.gbp(nw.net_worth)}</div>
+    <div class="networth-stats">
+      <div class="networth-stat"><span>${fmt.gbp(nw.cash_total)}</span><label>Cash</label></div>
+      <div class="networth-stat"><span>${fmt.gbp(nw.assets_total)}</span><label>Assets</label></div>
+      <div class="networth-stat"><span class="networth-neg">${fmt.gbp(nw.liabilities_total)}</span><label>Liabilities</label></div>
+    </div>`;
+}
+
+function findAsset(id) {
+  return (store.assets || []).find((a) => String(a.id) === String(id));
+}
+
+function assetRowInner(a) {
+  return `
+        <div>
+          <strong>${esc(a.name)}</strong>
+          <span class="asset-type-badge ${esc(a.type)}">${esc(ASSET_TYPE_LABELS[a.type] || a.type)}</span>
+          ${a.notes ? `<p class="hint-small">${esc(a.notes)}</p>` : ''}
+        </div>
+        <div class="subscription-actions">
+          <span class="asset-value">${fmt.gbp(a.value)}</span>
+          <button class="bill-edit-btn wf-action" data-action="edit-asset" data-asset-id="${a.id}" title="Edit asset" aria-label="Edit asset">✎</button>
+        </div>`;
+}
+
+function assetEditInner(a) {
+  const opts = ASSET_TYPES.map(([v, l]) => `<option value="${v}"${v === a.type ? ' selected' : ''}>${l}</option>`).join('');
+  return `
+    <div class="row-edit" data-asset-id="${a.id}">
+      <input type="text" class="te-input" data-f="name" value="${esc(a.name)}" placeholder="Name">
+      <div class="row-edit-fields">
+        <label>Type<select data-f="type">${opts}</select></label>
+        <label>Value £<input type="number" step="0.01" min="0" data-f="value" value="${a.value}"></label>
+        <label>Notes<input type="text" data-f="notes" value="${esc(a.notes || '')}"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-asset-inline" data-asset-id="${a.id}">Save</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-asset-inline" data-asset-id="${a.id}">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost wf-action" data-action="delete-asset" data-asset-id="${a.id}" style="margin-left:auto">Delete</button>
+      </div>
+    </div>`;
+}
+
+function assetAddInner() {
+  const opts = ASSET_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  return `
+    <div class="row-edit" id="asset-add-form">
+      <input type="text" class="te-input" data-f="name" placeholder="Name (e.g. Family home, VW Golf)">
+      <div class="row-edit-fields">
+        <label>Type<select data-f="type">${opts}</select></label>
+        <label>Value £<input type="number" step="0.01" min="0" data-f="value" placeholder="0"></label>
+        <label>Notes<input type="text" data-f="notes" placeholder="Optional detail"></label>
+      </div>
+      <div class="row-edit-actions">
+        <button type="button" class="btn btn-sm btn-primary wf-action" data-action="save-asset-new">Add</button>
+        <button type="button" class="btn btn-sm btn-secondary wf-action" data-action="cancel-add-row" data-container="assets-list">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderAssets(assets) {
+  const list = document.getElementById('assets-list');
+  if (!list) return;
+  list.innerHTML = (assets && assets.length)
+    ? assets.map((a) => `<div class="maintenance-row" data-asset-id="${a.id}">${assetRowInner(a)}</div>`).join('')
+    : '<div class="vault-empty"><p>No assets added yet.</p><p class="hint-small">Add your house, cars and valuables to see your true net worth.</p></div>';
 }
 
 function renderAppointments(data, filter = 'all', category = 'all') {
@@ -2543,6 +2765,8 @@ function renderNotificationPrefs(prefs) {
   section.hidden = false;
   const master = !!prefs.master_enabled;
   const lead = Number.isFinite(prefs.reminder_lead_days) ? prefs.reminder_lead_days : 3;
+  const largeOn = !!prefs.large_transaction_alerts;
+  const threshold = Number.isFinite(prefs.large_transaction_threshold) ? prefs.large_transaction_threshold : 200;
   const rows = NOTIF_PREF_ROWS.map(([key, label, desc]) => `
       <label class="notif-pref-row${master ? '' : ' disabled'}">
         <span class="notif-pref-text"><strong>${label}</strong><small>${desc}</small></span>
@@ -2557,6 +2781,14 @@ function renderNotificationPrefs(prefs) {
         <input type="checkbox" class="notif-pref-toggle" data-pref="master_enabled"${master ? ' checked' : ''}>
       </label>
       ${rows}
+      <label class="notif-pref-row${master ? '' : ' disabled'}">
+        <span class="notif-pref-text"><strong>Large transaction alerts</strong><small>Get pinged when a big payment lands</small></span>
+        <input type="checkbox" class="notif-pref-toggle" data-pref="large_transaction_alerts"${largeOn ? ' checked' : ''}${master ? '' : ' disabled'}>
+      </label>
+      <label class="notif-pref-row${master && largeOn ? '' : ' disabled'}">
+        <span class="notif-pref-text"><strong>Alert me over</strong><small>Threshold for a “large” transaction</small></span>
+        <span class="notif-pref-amount">£<input type="number" min="0" step="10" class="notif-pref-lead" data-pref="large_transaction_threshold" value="${threshold}"${master && largeOn ? '' : ' disabled'}></span>
+      </label>
       <label class="notif-pref-row${master ? '' : ' disabled'}">
         <span class="notif-pref-text"><strong>Remind me this many days ahead</strong><small>How far in advance reminders arrive</small></span>
         <input type="number" min="0" max="60" class="notif-pref-lead" data-pref="reminder_lead_days" value="${lead}"${master ? '' : ' disabled'}>
@@ -2574,17 +2806,19 @@ async function handleNotifPrefChange(el) {
   } else {
     value = parseInt(el.value, 10);
     if (!Number.isFinite(value) || value < 0) value = 0;
-    if (value > 60) value = 60;
+    // reminder_lead_days is capped at 60; the large-transaction threshold has no upper bound.
+    if (key === 'reminder_lead_days' && value > 60) value = 60;
     el.value = value;
   }
   notifPrefs[key] = value;
-  // The master switch enables/disables everything else — re-render for instant feedback.
-  if (key === 'master_enabled') renderNotificationPrefs(notifPrefs);
+  // The master switch and the large-transaction toggle enable/disable other rows —
+  // re-render for instant feedback.
+  if (key === 'master_enabled' || key === 'large_transaction_alerts') renderNotificationPrefs(notifPrefs);
   try {
     const updated = await api('/notifications/prefs', { method: 'PATCH', body: JSON.stringify({ [key]: value }) });
     if (updated && typeof updated === 'object') {
       notifPrefs = updated;
-      if (key === 'master_enabled') renderNotificationPrefs(notifPrefs);
+      if (key === 'master_enabled' || key === 'large_transaction_alerts') renderNotificationPrefs(notifPrefs);
     }
     showToast('Saved');
   } catch (err) {
@@ -3758,6 +3992,73 @@ function initActions() {
       }
       return;
     }
+
+    // --- Shopping list (home) ---
+    if (action === 'add-shopping') { addShoppingItem(); return; }
+    if (action === 'delete-shopping') { deleteShoppingItem(btn.dataset.shopId); return; }
+    if (action === 'clear-done-shopping') { clearDoneShopping(); return; }
+
+    // --- Assets (finances net worth) — inline CRUD, refresh headline + list together ---
+    if (action === 'add-asset') {
+      const host = document.getElementById('assets-list');
+      if (host && !document.getElementById('asset-add-form')) {
+        host.insertAdjacentHTML('afterbegin', assetAddInner());
+        document.querySelector('#asset-add-form [data-f="name"]')?.focus();
+      }
+      return;
+    }
+    if (action === 'save-asset-new') {
+      const f = readInlineFields(document.getElementById('asset-add-form'));
+      if (!f.name || !f.name.trim()) { showToast('Asset needs a name', true); return; }
+      btn.disabled = true;
+      api('/assets', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: f.name.trim(),
+          type: f.type || 'other',
+          value: parseFloat(f.value) || 0,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadNetWorth()).then(() => showToast('Asset added'))
+        .catch((err) => { showToast(err.message, true); btn.disabled = false; });
+      return;
+    }
+    if (action === 'edit-asset') {
+      const row = btn.closest('.maintenance-row');
+      const a = findAsset(btn.dataset.assetId);
+      if (row && a) { row.classList.add('editing'); row.innerHTML = assetEditInner(a); row.querySelector('[data-f="name"]')?.focus(); }
+      return;
+    }
+    if (action === 'save-asset-inline') {
+      const row = btn.closest('.maintenance-row');
+      const f = readInlineFields(row);
+      if (!f.name || !f.name.trim()) { showToast('Asset needs a name', true); return; }
+      api(`/assets/${btn.dataset.assetId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: f.name.trim(),
+          type: f.type || 'other',
+          value: parseFloat(f.value) || 0,
+          notes: (f.notes || '').trim() || null,
+        }),
+      }).then(() => loadNetWorth()).then(() => showToast('Asset updated'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+    if (action === 'cancel-asset-inline') {
+      const row = btn.closest('.maintenance-row');
+      const a = findAsset(btn.dataset.assetId);
+      if (row && a) { row.classList.remove('editing'); row.innerHTML = assetRowInner(a); }
+      return;
+    }
+    if (action === 'delete-asset') {
+      if (!confirm('Delete this asset?')) return;
+      api(`/assets/${btn.dataset.assetId}`, { method: 'DELETE' })
+        .then(() => loadNetWorth()).then(() => showToast('Asset deleted'))
+        .catch((err) => showToast(err.message, true));
+      return;
+    }
+
     showToast(`“${action.replace(/-/g, ' ')}” isn’t available yet`);
   });
 
@@ -3774,6 +4075,13 @@ function initActions() {
     const prefEl = e.target.closest('[data-pref]');
     if (prefEl) {
       handleNotifPrefChange(prefEl);
+      return;
+    }
+
+    // Shopping list — tick/untick an item.
+    const shopCb = e.target.closest('.shopping-check');
+    if (shopCb) {
+      toggleShoppingItem(shopCb.dataset.shopId, shopCb.checked);
       return;
     }
 
@@ -3825,6 +4133,11 @@ function initActions() {
       closeWeather();
       closeLoginPreview();
     }
+  });
+
+  // Enter in the shopping-list input adds the item.
+  document.getElementById('shopping-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addShoppingItem(); }
   });
 
   document.getElementById('login-close')?.addEventListener('click', closeLoginPreview);
@@ -4488,10 +4801,13 @@ async function load() {
     renderHome(dashboard);
     renderNotifications(dashboard.reminders || [], dashboard.notifications_unread);
   }
+  loadShopping();  // shared shopping list on the home card (own endpoint)
   if (briefing) renderBriefing(briefing);
   if (activity) renderActivityFeed(activity);
   if (calendar) renderCalendar(calendar);
   if (finances) renderFinances(finances);
+  loadInsights();   // Finances → Insights card (own endpoint)
+  loadNetWorth();   // Finances → Net worth + assets (own endpoints)
   if (renewals) renderRenewals(renewals);
   if (maintenance) renderMaintenance(maintenance);
   renderTradespeople(tradespeople || { tradespeople: [] });
