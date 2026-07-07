@@ -44,6 +44,29 @@ def test_remember_fact_needs_a_fact():
     assert out["ok"] is False
 
 
+def test_email_search_tools_registered():
+    names = _tool_names()
+    assert "search_email" in names and "file_email_attachment" in names
+
+
+def test_email_search_degrades_without_google(monkeypatch):
+    from server.services import email_search
+    # No connected Google account in the test DB → friendly error, never raises.
+    monkeypatch.setattr(email_search.db, "list_google_accounts", lambda uid: [])
+    assert email_search.is_available("luke") is False
+    assert email_search.search("luke", "car insurance")["error"]
+    assert email_search.search("luke", "")["error"]           # empty query guarded
+    r = email_search.file_attachment("luke", "somemsgid", "x.pdf")
+    assert r["ok"] is False
+
+
+def test_email_search_tool_dispatch_is_graceful(monkeypatch):
+    from server.services import email_search
+    monkeypatch.setattr(email_search.db, "list_google_accounts", lambda uid: [])
+    out = asyncio.run(A.execute_tool("search_email", {"query": "vet Bean"}, db.get_user("luke")))
+    assert "error" in out and out.get("results") == []
+
+
 def test_get_shopping_list_tool_reads_back():
     db.create_shopping_item("assistant-test-milk", "luke")
     out = asyncio.run(A.execute_tool("get_shopping_list", {}, db.get_user("luke")))

@@ -15,6 +15,7 @@ from server import database as db
 from server.services import openrouter
 from server.services import activity as activity_log
 from server.services import briefing as briefing_svc
+from server.services import email_search as email_svc
 from server.services import memory as mem_svc
 from server.services import occasions as occasions_svc
 from server.services import search as search_svc
@@ -48,6 +49,7 @@ You can read household data and take actions using tools across the whole home:
 - Diary & jobs: calendar events, tasks, appointments, the shopping list, meal plans and recipes.
 - Money: bills, transactions, and finance summaries (you can't connect banks or move money).
 - Family life: birthdays & anniversaries (occasions), gift ideas (wishlist), the kids' & pets' care (jabs/checkups), cars (MOT/tax/insurance/service), holidays & trips.
+- Email: you CAN search their connected Gmail (read-only) with search_email when they ask about something in their inbox — insurance renewals, bookings, vet/appointment details, "what did X say", finding an invoice, etc. Use a focused query, read the results, then answer. You can then record what you find: save a fact with remember_fact, add a diary/appointment/task, or save an attached document to the Vault with file_email_attachment (using the message_id from the search).
 - Long-term memory: you remember durable facts about the family. The "long-term memory" block (when shown) is what you already know — weave it in naturally, don't recite it. When they tell you something worth keeping for the future ("Arthur's shoe size is 6", "we're vegetarian now", "the boiler is a Worcester Bosch"), call remember_fact. Don't remember one-off/transient things.
 
 Rules:
@@ -581,6 +583,44 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_email",
+            "description": ("Search the user's connected Gmail (read-only) when they ask about something in "
+                            "their email — e.g. 'when does my car insurance renew?', 'what did the vet say about "
+                            "Bean?', 'find the booking confirmation for the kennels'. Returns matching emails with "
+                            "sender, date, subject, a snippet, any attachment filenames, and a message_id. Use a "
+                            "focused Gmail query (keywords, sender, or Gmail operators like from: subject: newer_than:1y). "
+                            "After reading the results, answer the question, and offer to save anything worth keeping "
+                            "using remember_fact, create_appointment/create_task, or file_email_attachment."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Gmail search query (keywords and/or operators)."},
+                    "limit": {"type": "integer", "description": "Max emails to return (default 8)."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_email_attachment",
+            "description": ("Save an attachment from a specific email into the Hub's document Vault. Use the "
+                            "message_id from a search_email result. Supports PDF/images/Word docs. Optionally pass "
+                            "the exact filename (from the search result's attachments list) to save just that one."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "The message_id from a search_email result."},
+                    "filename": {"type": "string", "description": "Optional exact attachment filename to save."},
+                },
+                "required": ["message_id"],
+            },
+        },
+    },
 ]
 
 
@@ -1071,6 +1111,14 @@ async def execute_tool(name: str, args: dict, user: dict, *, confirmed: bool = F
                 source="assistant",
             )
             return {"ok": bool(saved), "remembered": (saved or {}).get("text", fact)}
+        if name == "search_email":
+            return await asyncio.to_thread(
+                email_svc.search, uid, args.get("query", ""), int(args.get("limit") or 8)
+            )
+        if name == "file_email_attachment":
+            return await asyncio.to_thread(
+                email_svc.file_attachment, uid, args.get("message_id", ""), args.get("filename")
+            )
         return {"ok": False, "error": f"Unknown tool: {name}"}
     except Exception as exc:
         logger.exception("Tool %s failed", name)
