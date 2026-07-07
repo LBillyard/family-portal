@@ -16,7 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="The Hub">
-  <link rel="stylesheet" href="/static/style.css?v=48">
+  <link rel="stylesheet" href="/static/style.css?v=49">
   <script>
     // No-flash theme guard: set the theme attribute before first paint.
     // 'system' (or unset) leaves the attribute off so prefers-color-scheme wins.
@@ -145,8 +145,12 @@
 
         <div id="home-stats" class="stats-row"></div>
 
+        <div class="home-customise-bar">
+          <button id="home-customise-btn" class="btn btn-sm btn-secondary wf-action" data-action="toggle-home-customise" aria-pressed="false">⚙︎ Customise</button>
+        </div>
+
         <div class="dashboard-grid">
-          <div class="card">
+          <div class="card" data-card="events">
             <div class="card-header-row">
               <div class="card-header"><h3>This week</h3><p>Google Calendar + portal events</p></div>
               <button class="card-link-btn wf-action" data-action="add-event" data-modal="add-event">+ Add</button>
@@ -154,7 +158,7 @@
             <div id="home-events"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="tasks">
             <div class="card-header-row">
               <div class="card-header"><h3>Shared tasks</h3><p>Household to-do list</p></div>
               <div style="display:flex;gap:8px">
@@ -165,7 +169,7 @@
             <div id="home-tasks"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="occasions">
             <div class="card-header-row">
               <div class="card-header"><h3>Occasions</h3><p>Birthdays &amp; anniversaries — with countdowns</p></div>
               <button class="card-link-btn wf-action" data-action="add-occasion">+ Add</button>
@@ -173,7 +177,7 @@
             <div id="occasions-list"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="wishlist">
             <div class="card-header-row">
               <div class="card-header"><h3>Gift ideas</h3><p>Wishlists for birthdays &amp; Christmas — never stuck for a present</p></div>
               <button class="card-link-btn wf-action" data-action="add-wishlist">+ Add</button>
@@ -181,7 +185,7 @@
             <div id="wishlist-list"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="shopping">
             <div class="card-header"><h3>Shopping list</h3><p>Shared between you</p></div>
             <div class="shopping-add">
               <input type="text" id="shopping-input" class="shopping-input" placeholder="Add an item…" autocomplete="off">
@@ -190,12 +194,12 @@
             <div id="home-shopping"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="meals">
             <div class="card-header"><h3>This week's dinners</h3><p>Plan meals &amp; build the shopping list</p></div>
             <div id="home-meals"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="recipes">
             <div class="card-header-row">
               <div class="card-header"><h3>Recipe book</h3><p>Your go-to meals — drop one straight into the plan</p></div>
               <button class="card-link-btn wf-action" data-action="add-recipe">+ Add</button>
@@ -203,7 +207,7 @@
             <div id="recipes-list"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="bills">
             <div class="card-header-row">
               <div class="card-header"><h3>Bills due soon</h3><p>Upcoming payments</p></div>
               <button class="card-link-btn wf-action" data-tab-link="finances">View all</button>
@@ -211,7 +215,7 @@
             <div id="home-bills"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="appointments">
             <div class="card-header-row">
               <div class="card-header"><h3>Appointments</h3><p>Next 7 days</p></div>
               <button class="card-link-btn wf-action" data-tab-link="appointments">View all</button>
@@ -219,7 +223,7 @@
             <div id="home-appointments"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="holiday">
             <div class="card-header-row">
               <div class="card-header"><h3>Next holiday</h3><p>Countdown &amp; checklist</p></div>
               <button class="card-link-btn wf-action" data-tab-link="holidays">Plan trip</button>
@@ -227,7 +231,7 @@
             <div id="home-holiday"></div>
           </div>
 
-          <div class="card">
+          <div class="card" data-card="documents">
             <div class="card-header-row">
               <div class="card-header"><h3>Document alerts</h3><p>Expiry &amp; renewals</p></div>
               <button class="card-link-btn wf-action" data-tab-link="documents">Open vault</button>
@@ -235,12 +239,12 @@
             <div id="home-documents"></div>
           </div>
 
-          <div class="card span-2">
+          <div class="card span-2" data-card="finances">
             <div class="card-header"><h3>Monthly finances</h3><p id="home-finance-sub">Income vs spending</p></div>
             <div id="home-finance"></div>
           </div>
 
-          <div class="card span-2">
+          <div class="card span-2" data-card="activity">
             <div class="card-header-row">
               <div class="card-header"><h3>Activity feed</h3><p>Recent household actions</p></div>
             </div>
@@ -767,6 +771,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=48"></script>
+  <script src="/static/app.js?v=49"></script>
 </body>
 </html>

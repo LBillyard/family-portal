@@ -6,7 +6,7 @@ import os
 import secrets
 import time
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 from pathlib import Path
@@ -25,6 +25,7 @@ from server.services import weather as weather_svc, gmail_receipts, push as push
 from server.services import whatsapp as whatsapp_svc, whatsapp_meta, whatsapp_twilio
 from server.services import insights, networth, occasions, vehicles as vehicles_svc
 from server.services import cashflow
+from server.services import export_data
 from shared.schemas import (
     AccountUpdate,
     AppointmentCreate,
@@ -946,6 +947,22 @@ def export_transactions(_: dict = Depends(require_user)):
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="transactions.csv"'},
+    )
+
+
+@router.get("/export")
+def export_all_data(_: dict = Depends(require_user)):
+    """Download all our data — a single JSON the family can keep.
+
+    Whitelist-only: never includes credentials, tokens or password hashes.
+    """
+    payload = export_data.build_export(
+        exported_at=datetime.now(timezone.utc).isoformat()
+    )
+    return Response(
+        content=json.dumps(payload, default=str, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=hub-export.json"},
     )
 
 

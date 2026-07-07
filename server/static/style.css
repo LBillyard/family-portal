@@ -5440,3 +5440,62 @@ dialog select:focus {
   font-weight: 600;
   color: var(--navy-900);
 }
+
+/* --- Home customise mode (Feature A) ------------------------------------- */
+.home-customise-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+
+/* Dashed outline on each card while editing, so it reads as movable. */
+.dashboard-grid.home-grid-editing > .card[data-card] {
+  outline: 2px dashed var(--border);
+  outline-offset: 3px;
+}
+
+/* Hidden cards are greyed (still visible) while customising so they can be
+   un-hidden; the display:none for normal mode is applied inline by the JS. */
+.dashboard-grid.home-grid-editing > .card.home-card-hidden {
+  opacity: 0.5;
+}
+
+/* Per-card move + hide controls, injected at the top of each card in edit mode. */
+.home-card-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.home-card-ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.home-card-ctl:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.home-card-ctl:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.home-card-hide {
+  margin-left: auto;
+}

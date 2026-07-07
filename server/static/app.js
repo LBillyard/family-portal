@@ -1261,6 +1261,140 @@ function savingsAddInner() {
     </div>`;
 }
 
+// --- Feature A: Home layout (reorder + hide cards, per-device) -------------
+// Saved in localStorage under 'hub-home-layout' as { order:[key...], hidden:[key...] }.
+// Card keys come from the data-card attribute on each `.dashboard-grid > .card`.
+// Unknown / brand-new cards (not in the saved order) always render, appended
+// after the known ones, so future features keep appearing automatically.
+const HOME_LAYOUT_KEY = 'hub-home-layout';
+let homeCustomising = false;
+
+function getHomeLayout() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HOME_LAYOUT_KEY) || '{}');
+    return {
+      order: Array.isArray(raw.order) ? raw.order.filter((k) => typeof k === 'string') : [],
+      hidden: Array.isArray(raw.hidden) ? raw.hidden.filter((k) => typeof k === 'string') : [],
+    };
+  } catch {
+    return { order: [], hidden: [] };
+  }
+}
+
+function saveHomeLayout(layout) {
+  try {
+    localStorage.setItem(HOME_LAYOUT_KEY, JSON.stringify({
+      order: Array.isArray(layout.order) ? layout.order : [],
+      hidden: Array.isArray(layout.hidden) ? layout.hidden : [],
+    }));
+  } catch { /* storage full / disabled — layout just won't persist */ }
+}
+
+function homeGrid() {
+  return document.querySelector('#tab-home .dashboard-grid');
+}
+
+// Only cards that carry a stable data-card key participate in reorder/hide.
+function homeCards() {
+  const grid = homeGrid();
+  return grid ? Array.from(grid.querySelectorAll(':scope > .card[data-card]')) : [];
+}
+
+// The full key order actually applied: saved keys that still exist first (in
+// saved order), then any remaining present cards in their current DOM order.
+function homeResolvedOrder() {
+  const layout = getHomeLayout();
+  const present = homeCards().map((c) => c.dataset.card);
+  const seen = new Set();
+  const out = [];
+  layout.order.forEach((k) => {
+    if (present.includes(k) && !seen.has(k)) { out.push(k); seen.add(k); }
+  });
+  present.forEach((k) => {
+    if (!seen.has(k)) { out.push(k); seen.add(k); }
+  });
+  return out;
+}
+
+// Apply saved order + hidden state to the live DOM. Safe to call on every home
+// render — it only moves existing card nodes (handlers/content preserved).
+function applyHomeLayout() {
+  const grid = homeGrid();
+  if (!grid) return;
+  const hidden = new Set(getHomeLayout().hidden);
+  const byKey = new Map(homeCards().map((c) => [c.dataset.card, c]));
+  const keys = homeResolvedOrder();
+
+  keys.forEach((key, idx) => {
+    const card = byKey.get(key);
+    if (!card) return;
+    grid.appendChild(card); // re-append in resolved order (moves the node)
+    const isHidden = hidden.has(key);
+    card.classList.toggle('home-card-hidden', isHidden);
+    // Hidden cards vanish normally; in customise mode they stay visible (greyed)
+    // so they can be un-hidden.
+    card.style.display = !isHidden || homeCustomising ? '' : 'none';
+    renderHomeCardControls(card, idx, keys.length, isHidden);
+  });
+}
+
+// Inject / remove the per-card move + hide controls used in customise mode.
+function renderHomeCardControls(card, idx, total, isHidden) {
+  let bar = card.querySelector(':scope > .home-card-controls');
+  if (!homeCustomising) {
+    if (bar) bar.remove();
+    return;
+  }
+  const key = card.dataset.card;
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'home-card-controls';
+    card.insertBefore(bar, card.firstChild);
+  }
+  bar.innerHTML = `
+    <button type="button" class="home-card-ctl wf-action" data-action="home-move-card" data-card="${esc(key)}" data-dir="up"${idx === 0 ? ' disabled' : ''} title="Move up" aria-label="Move card up">⬆︎</button>
+    <button type="button" class="home-card-ctl wf-action" data-action="home-move-card" data-card="${esc(key)}" data-dir="down"${idx === total - 1 ? ' disabled' : ''} title="Move down" aria-label="Move card down">⬇︎</button>
+    <button type="button" class="home-card-ctl home-card-hide wf-action" data-action="home-toggle-card-hidden" data-card="${esc(key)}" title="${isHidden ? 'Show this card' : 'Hide this card'}" aria-label="${isHidden ? 'Show this card' : 'Hide this card'}">${isHidden ? '👁 Show' : '🙈 Hide'}</button>`;
+}
+
+// Swap a card one slot up/down within the resolved order, then persist + apply.
+function moveHomeCard(key, dir) {
+  const keys = homeResolvedOrder();
+  const i = keys.indexOf(key);
+  if (i < 0) return;
+  const j = dir === 'up' ? i - 1 : i + 1;
+  if (j < 0 || j >= keys.length) return;
+  [keys[i], keys[j]] = [keys[j], keys[i]];
+  const layout = getHomeLayout();
+  layout.order = keys;
+  saveHomeLayout(layout);
+  applyHomeLayout();
+}
+
+function toggleHomeCardHidden(key) {
+  const layout = getHomeLayout();
+  const hidden = new Set(layout.hidden);
+  if (hidden.has(key)) hidden.delete(key); else hidden.add(key);
+  layout.hidden = Array.from(hidden);
+  saveHomeLayout(layout);
+  applyHomeLayout();
+}
+
+// Enter / leave customise mode: relabel the button, flag the grid, re-apply.
+function toggleHomeCustomise() {
+  homeCustomising = !homeCustomising;
+  const btn = document.getElementById('home-customise-btn');
+  if (btn) {
+    btn.textContent = homeCustomising ? '✓ Done' : '⚙︎ Customise';
+    btn.setAttribute('aria-pressed', homeCustomising ? 'true' : 'false');
+    btn.classList.toggle('btn-primary', homeCustomising);
+    btn.classList.toggle('btn-secondary', !homeCustomising);
+  }
+  const grid = homeGrid();
+  if (grid) grid.classList.toggle('home-grid-editing', homeCustomising);
+  applyHomeLayout();
+}
+
 function renderHome(data) {
   const { users, upcoming_events, upcoming_bills, upcoming_appointments, next_holiday, finance_summary, tasks, documents } = data;
 
@@ -1359,6 +1493,9 @@ function renderHome(data) {
         <div class="stat" style="margin:0;padding:16px"><span style="font-size:1.5rem">${fmt.gbp(finance_summary.bills_due_this_month)}</span><label>Bills due</label></div>
       </div>
     </div>`;
+
+  // Reorder / hide cards to match the per-device saved layout (Feature A).
+  applyHomeLayout();
 }
 
 // --- Shared shopping list (home card) ---
@@ -3756,6 +3893,32 @@ function renderMemory(data) {
   }
 }
 
+// --- Feature B: Download all our data --------------------------------------
+// Pulls the whole-household export from the backend and saves it as a dated
+// JSON file. Non-200s and network errors both surface as a toast rather than
+// a broken/empty download.
+async function downloadAllData() {
+  try {
+    const res = await fetch(`${API}/export`, { credentials: 'include' });
+    if (!res.ok) {
+      showToast(`Export failed (${res.status}) — please try again`, true);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `hub-export-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Your data is downloading');
+  } catch {
+    showToast('Export failed — please try again', true);
+  }
+}
+
 function renderSettings(data) {
   const { users, sync = {}, notification_log = [], integrations = {}, google_accounts = [] } = data;
   const googleOk = integrations.google_calendar;
@@ -3955,6 +4118,11 @@ function renderSettings(data) {
       <h3>Document vault</h3>
       <p>${docCount} documents stored — upload insurance, passports and other files.</p>
       <button class="btn btn-sm btn-primary wf-action" data-tab-link="documents">Open document vault</button>
+    </div>
+    <div class="settings-section">
+      <h3>Your data</h3>
+      <p>Download everything The Hub holds for your household as a single JSON file — a portable backup you can keep safe or move elsewhere.</p>
+      <button class="btn btn-sm btn-primary wf-action" data-action="export-data">Download all our data</button>
     </div>
     <div class="settings-section">
       <h3>Login &amp; access</h3>
@@ -4718,6 +4886,22 @@ function initActions() {
     }
     if (action === 'set-theme') {
       setThemePref(btn.dataset.theme || 'system');
+      return;
+    }
+    if (action === 'toggle-home-customise') {
+      toggleHomeCustomise();
+      return;
+    }
+    if (action === 'home-move-card') {
+      moveHomeCard(btn.dataset.card, btn.dataset.dir);
+      return;
+    }
+    if (action === 'home-toggle-card-hidden') {
+      toggleHomeCardHidden(btn.dataset.card);
+      return;
+    }
+    if (action === 'export-data') {
+      downloadAllData();
       return;
     }
     if (action === 'toggle-task') {
