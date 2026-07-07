@@ -590,10 +590,12 @@ TOOLS: list[dict] = [
             "description": ("Search the user's connected Gmail (read-only) when they ask about something in "
                             "their email — e.g. 'when does my car insurance renew?', 'what did the vet say about "
                             "Bean?', 'find the booking confirmation for the kennels'. Returns matching emails with "
-                            "sender, date, subject, a snippet, any attachment filenames, and a message_id. Use a "
-                            "focused Gmail query (keywords, sender, or Gmail operators like from: subject: newer_than:1y). "
-                            "After reading the results, answer the question, and offer to save anything worth keeping "
-                            "using remember_fact, create_appointment/create_task, or file_email_attachment."),
+                            "sender, date, subject, a snippet, any attachment filenames, and a message_id. Start "
+                            "with SIMPLE, BROAD keywords (e.g. just 'Bean vaccination', 'Admiral', 'MOT'), not long "
+                            "exact phrases or lots of operators. If a search returns nothing, RETRY with fewer/broader "
+                            "keywords before telling the user you found nothing. After reading the results, answer the "
+                            "question, and offer to save anything worth keeping using remember_fact, "
+                            "create_appointment/create_task, or file_email_attachment."),
             "parameters": {
                 "type": "object",
                 "properties": {
