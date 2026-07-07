@@ -170,6 +170,15 @@ def whatsapp_digest_line(user: dict | None = None, weather: str | None = None) -
     open_tasks = [t for t in db.list_tasks() if not t.get("done")]
     due_now = [t for t in open_tasks if t.get("due") and t["due"][:10] <= today.isoformat()]
     task_list = due_now or open_tasks
+    seen_titles: set = set()
+    deduped_tasks = []
+    for t in task_list:
+        key = (t.get("title") or "").strip().lower()
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        deduped_tasks.append(t)
+    task_list = deduped_tasks
     if task_list:
         task_part = "✅ " + ", ".join(t["title"] for t in task_list[:6])
     else:
